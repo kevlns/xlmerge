@@ -95,7 +95,3 @@ python/
 ## License
 
 [MIT](LICENSE)
-
-## 版本
-
-- 0.0.1：首个个人仓库版本（源自内部 Skill v1.2.0，2025-08-10）
