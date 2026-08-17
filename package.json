@@ -1,6 +1,6 @@
 {
   "name": "xlmerge",
-  "version": "0.0.1",
+  "version": "1.2.0",
   "description": "Visual resolver for unresolved Git merge conflicts in .xlsx/.xlsm workbooks: three-way sheet/row/cell diff, local UI, write-back and commit.",
   "bin": {
     "xlmerge": "bin/xlmerge.js"
