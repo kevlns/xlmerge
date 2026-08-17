@@ -5,7 +5,7 @@ description: "Deterministic launcher for unresolved Git merge conflicts in plann
 
 # XLSX/XLSM Conflict Resolver（npm 通用版）
 
-> 基于 Debussy 内部 Skill v1.2.0 打包。处理任意 Git 仓库中未合并的 `.xlsx` / `.xlsm` 二进制冲突。
+> 处理任意 Git 仓库中未合并的 `.xlsx` / `.xlsm` 二进制冲突。
 
 命令入口（npm 安装后全局可用，`<repo>` 为配置表 Git 仓库路径）：
 
