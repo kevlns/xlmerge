@@ -1,0 +1,1222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Excel 冲突解决工具</title>
+<style>
+:root {
+  --bg-deep: #f4eed8;
+  --bg-root: #e6dfc8;
+  --bg-surface: #ffffff;
+  --border-default: #000000;
+  --shadow-edge: #625a4d;
+  --gold: #f2c94c;
+  --gold-dim: #e0b83e;
+  --lava: #f29aa3;
+  --emerald: #a2d2ff;
+  --sapphire: #9dccff;
+  --incoming: #cfe9b7;
+  --incoming-deep: #b6d998;
+  --tombstone: #77736b;
+  --tombstone-dark: #58554f;
+  --text-primary: #111111;
+  --text-secondary: #444444;
+  --text-muted: #777777;
+  --shadow: 4px 4px 0 #000000;
+  --shadow-hover: 2px 2px 0 #000000;
+  --border-width: 3px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { width: 100%; height: 100%; overflow: hidden; }
+body {
+  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-deep);
+  background-image:
+    linear-gradient(var(--bg-root) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bg-root) 1px, transparent 1px);
+  background-size: 20px 20px;
+  color: var(--text-primary);
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.toolbar {
+  background: var(--bg-surface);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border-bottom: var(--border-width) solid var(--border-default);
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.toolbar h1 {
+  flex: 0 0 auto;
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.file-tabs, .sheet-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: var(--border-default) transparent;
+  scrollbar-width: thin;
+}
+.file-tabs { flex: 1 1 auto; padding: 2px 4px 7px 0; }
+.sheet-tabs { flex: 1 1 auto; padding: 2px 4px 5px 0; }
+.file-tabs::-webkit-scrollbar, .sheet-tabs::-webkit-scrollbar { height: 8px; }
+.file-tabs::-webkit-scrollbar-track, .sheet-tabs::-webkit-scrollbar-track { background: transparent; }
+.file-tabs::-webkit-scrollbar-thumb, .sheet-tabs::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border: 2px solid var(--bg-surface);
+}
+.file-tab, .sheet-tab {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  border: var(--border-width) solid var(--border-default);
+  box-shadow: var(--shadow);
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+.file-tab:hover, .sheet-tab:hover { transform: translate(2px, 2px); box-shadow: var(--shadow-hover); }
+.file-tab.active {
+  background: var(--emerald);
+  transform: translate(2px, 2px);
+  box-shadow: var(--shadow-hover);
+}
+.file-tab.has-conflicts { color: var(--text-primary); }
+.sheet-toolbar {
+  background: #fff8dc;
+  padding: 9px 20px 11px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: var(--border-width) solid var(--border-default);
+}
+.sheet-choice { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
+.macro-label { font-size: 11px; font-weight: 900; color: #3d3529; white-space: nowrap; }
+.macro-toggle { padding: 5px 9px; font-size: 11px; opacity: .55; }
+.macro-toggle.is-selected { opacity: 1; outline: 2px solid #4f4638; outline-offset: 1px; }
+.macro-toggle:disabled { cursor: not-allowed; filter: grayscale(.45); opacity: .45; }
+.macro-note { font-size: 11px; font-weight: 700; color: #6a5142; white-space: nowrap; }
+.diff-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 20px;
+  border-bottom: 2px solid #cfc5ae;
+  background: #f8f1de;
+  color: #4b4438;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+.legend-intro { color: #27231d; font-weight: 900; }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.legend-swatch { width: 18px; height: 13px; border: 1px solid #6e6657; display: inline-block; }
+.legend-local { background: var(--sapphire); box-shadow: inset 0 0 0 2px rgba(35, 84, 130, .42); }
+.legend-remote { background: var(--lava); box-shadow: inset 0 0 0 2px rgba(124, 38, 47, .38); }
+.legend-incoming { background: var(--incoming); }
+.legend-deleted { background: var(--tombstone); }
+.sheet-label {
+  padding: 5px 8px;
+  background: var(--border-default);
+  color: var(--bg-surface);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+}
+.sheet-tab { padding: 6px 13px; box-shadow: 3px 3px 0 #000; }
+.sheet-tab.active {
+  background: var(--gold);
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #000;
+}
+.tab-count {
+  margin-left: 7px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.actions { flex: 0 0 auto; margin-left: 0; display: flex; gap: 8px; align-items: center; }
+.btn {
+  padding: 8px 16px;
+  border: 1px solid #d8cfbd;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: inherit;
+  letter-spacing: .2px;
+  box-shadow: 2px 2px 0 var(--shadow-edge);
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+  background: linear-gradient(180deg, #f6f0e2, #dcd1bc);
+  color: #2a261f;
+}
+.btn:hover { transform: translate(1px, 1px); filter: brightness(1.04); box-shadow: 1px 1px 0 var(--shadow-edge); }
+.btn:active { transform: translateY(1px); filter: brightness(.96); }
+.btn:focus-visible { outline: 3px solid #a2d2ff; outline-offset: 2px; }
+.btn-local { background: linear-gradient(180deg, #d9ecff, #91c4f1); border-color: #b8d8f4; color: #173f63; }
+.btn-remote { background: linear-gradient(180deg, #ffd1d5, #e9919a); border-color: #f2b3ba; color: #5a2027; }
+.btn-undo { background: linear-gradient(180deg, #f7f2e7, #dcd2bf); border-color: #e4ddcf; color: #2d2923; }
+.btn-reset { background: linear-gradient(180deg, #ffe7a5, #efc65c); border-color: #f5dfa1; color: #49360d; }
+.btn-cancel { background: linear-gradient(180deg, #f5c9cc, #dfa0a6); border-color: #efc2c6; color: #4a2529; }
+.btn-submit {
+  position: relative;
+  min-width: 126px;
+  padding: 11px 28px;
+  background: linear-gradient(180deg, #ffdc8a, #f4aa3e);
+  border: 1px solid #f5d18d;
+  border-bottom-color: #dbab5e;
+  color: #3d2608;
+  font-size: 14px;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, .35);
+  box-shadow: 0 4px 0 #ad7626, 2px 2px 0 var(--shadow-edge);
+}
+.btn-submit:hover { transform: translateY(-1px); box-shadow: 0 5px 0 #ad7626, 2px 2px 0 var(--shadow-edge); }
+.btn-submit:active { transform: translateY(3px); box-shadow: 0 1px 0 #ad7626; }
+.btn:disabled { opacity: .38; cursor: not-allowed; transform: none; filter: none; }
+.stats {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.table-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 16px;
+}
+table.diff-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  width: auto;
+  border: var(--border-width) solid var(--border-default);
+  box-shadow: var(--shadow);
+  background: var(--bg-surface);
+}
+table.diff-table th, table.diff-table td {
+  border: 2px solid var(--border-default);
+  padding: 6px 12px;
+  text-align: left;
+  min-width: 80px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+table.diff-table th {
+  background: var(--gold);
+  color: #111;
+  font-weight: 800;
+  cursor: pointer;
+  text-shadow: none;
+}
+table.diff-table th:hover { background: var(--gold-dim); color: #111; }
+td.cell-local {
+  background: var(--sapphire);
+  color: #111;
+  cursor: pointer;
+}
+td.cell-remote {
+  background: var(--lava);
+  color: #111;
+  cursor: pointer;
+}
+td.cell-no-conflict { background: var(--bg-surface); color: var(--text-secondary); }
+.cell-selectable { box-shadow: inset 0 0 0 2px rgba(47, 42, 34, .38); cursor: pointer !important; }
+.cell-selectable:hover { filter: brightness(.92) saturate(1.12); box-shadow: inset 0 0 0 3px rgba(47, 42, 34, .58); }
+.row-header { cursor: pointer; }
+.row-header:hover { background: var(--emerald) !important; }
+tr.luban-header th { background: #2d2d2d; color: #f2f2f2; font-weight: 700; cursor: default; font-size: 12px; }
+tr.luban-header th:hover { background: #2d2d2d; color: #f2f2f2; }
+.axis-added-incoming {
+  background: var(--incoming) !important;
+  color: #29401f !important;
+}
+.axis-added-incoming:hover { background: var(--incoming-deep) !important; }
+.axis-tombstone {
+  background-color: var(--tombstone) !important;
+  background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.08) 0 8px, rgba(0,0,0,.08) 8px 16px) !important;
+  color: #f4f1e9 !important;
+  cursor: not-allowed !important;
+  text-decoration: line-through;
+}
+.axis-tombstone:hover { background-color: var(--tombstone-dark) !important; }
+.structure-control { min-width: 80px; padding: 4px 5px !important; text-align: center !important; background: #ece5d4 !important; }
+.structure-toggle {
+  border: 1px solid #c6bca8;
+  border-radius: 3px;
+  padding: 3px 7px;
+  background: #fff8dc;
+  color: #332b20;
+  font: 700 11px/1.2 inherit;
+  cursor: pointer;
+  box-shadow: 1px 1px 0 var(--shadow-edge);
+}
+.structure-toggle.is-delete { background: var(--tombstone); color: #fff; border-color: var(--tombstone-dark); }
+.structure-badge { display: inline-block; padding: 2px 6px; border: 1px solid rgba(0,0,0,.28); font-size: 10px; font-weight: 800; }
+.structure-badge.added { background: var(--incoming); color: #29401f; }
+.structure-badge.local-existing { background: #eee8dc; color: #4b4438; border-color: #bdb4a4; }
+.structure-badge.deleted { background: var(--tombstone); color: #fff; }
+.axis-index { display: inline-block; min-width: 22px; font-weight: 900; }
+.axis-index.is-removed { color: #f7f1e5; }
+.axis-source { display: block; margin-top: 2px; font-size: 9px; font-weight: 700; opacity: .72; }
+.sheet-tab.sheet-added { background: var(--incoming); }
+.sheet-tab.sheet-deleted { background: var(--tombstone); color: #fff; text-decoration: line-through; }
+.sheet-tab.sheet-structural-conflict::before { content: '◆'; margin-right: 5px; color: #a8392f; }
+.cell-locked { cursor: not-allowed !important; }
+.tooltip {
+  position: fixed;
+  display: none;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: var(--border-width) solid var(--border-default);
+  padding: 10px 14px;
+  font-size: 12px;
+  z-index: 1000;
+  pointer-events: none;
+  max-width: 520px;
+  box-shadow: var(--shadow);
+  word-break: break-word;
+}
+.tooltip .label { color: var(--text-muted); margin-bottom: 6px; font-weight: 600; }
+.tooltip .val-base { color: #666; }
+.tooltip .val-local { color: #246aa3; }
+.tooltip .val-remote { color: #c0392b; }
+.tooltip .val-current { color: var(--text-primary); margin-top: 5px; font-weight: 700; }
+.tooltip .author { color: #777; margin-left: 18px; font-weight: 400; }
+.sheet-message {
+  max-width: 720px;
+  margin: 20px;
+  padding: 24px;
+  background: var(--bg-surface);
+  border: var(--border-width) solid var(--border-default);
+  box-shadow: var(--shadow);
+}
+.sheet-message h2 { font-size: 17px; margin-bottom: 8px; }
+.sheet-message p { color: var(--text-secondary); margin-bottom: 16px; line-height: 1.6; }
+.pager { display: flex; gap: 6px; padding: 12px 0; }
+.commit-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; }
+.commit-modal.is-hidden { display: none; }
+.commit-modal-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .55); }
+.commit-modal-panel {
+  position: relative;
+  background: var(--bg-surface);
+  border: var(--border-width) solid var(--border-default);
+  box-shadow: 8px 8px 0 #000;
+  padding: 22px 26px;
+  max-width: 520px;
+  width: 88%;
+}
+.commit-modal-icon { font-size: 28px; margin-bottom: 8px; }
+.commit-modal-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+.commit-modal-body { font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; margin-bottom: 10px; }
+.commit-modal-steps { font-size: 12px; font-family: Consolas, monospace; background: rgba(0, 0, 0, .04); border: 1px solid #ddd; padding: 8px 10px; margin-bottom: 12px; white-space: pre-wrap; word-break: break-word; max-height: 45vh; overflow-y: auto; }
+.commit-modal-steps:empty { display: none; }
+.commit-modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.commit-modal.is-success .commit-modal-icon::before { content: "\2705"; }
+.commit-modal.is-error .commit-modal-icon::before { content: "\274C"; }
+.footer {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  background: var(--bg-surface);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: var(--border-width) solid var(--border-default);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.footer-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; }
+@media (max-width: 900px) {
+  .toolbar { flex-wrap: wrap; }
+  .file-tabs { order: 3; flex: 1 0 100%; width: 100%; }
+  .actions { width: auto; margin-left: auto; }
+  .sheet-toolbar { align-items: flex-start; }
+  .footer { align-items: flex-end; }
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>Excel 冲突解决工具</h1>
+  <div class="file-tabs" id="fileTabs"></div>
+  <div class="actions">
+    <button type="button" class="btn btn-local" id="allLocalBtn">全部本地</button>
+    <button type="button" class="btn btn-remote" id="allRemoteBtn">全部远端</button>
+    <button type="button" class="btn btn-undo" id="undoBtn">撤销</button>
+    <button type="button" class="btn btn-reset" id="resetBtn">重置</button>
+    <span class="stats"><span id="localCount">0</span> / <span id="totalCount">0</span></span>
+  </div>
+</div>
+<div class="sheet-toolbar">
+  <span class="sheet-label">SHEET</span>
+  <div class="sheet-tabs" id="sheetTabs"></div>
+  <div class="sheet-choice" id="sheetChoice"></div>
+</div>
+<div class="diff-legend" id="diffLegend">
+  <span class="legend-intro">主行列号＝合并后位置</span>
+  <span class="legend-item"><i class="legend-swatch legend-local"></i>本地值</span>
+  <span class="legend-item"><i class="legend-swatch legend-remote"></i>远端值</span>
+  <span class="legend-item"><i class="legend-swatch legend-incoming"></i>远端新增</span>
+  <span class="legend-item"><i class="legend-swatch legend-deleted"></i>已删除</span>
+  <span class="legend-item">悬停 Cell 查看 Base / 本地 / 远端</span>
+</div>
+<div class="table-container" id="tableContainer"></div>
+<div class="tooltip" id="tooltip"></div>
+<div class="commit-modal is-hidden" id="commitModal" role="dialog" aria-modal="true" aria-labelledby="commitModalTitle">
+  <div class="commit-modal-backdrop"></div>
+  <div class="commit-modal-panel">
+    <div class="commit-modal-icon"></div>
+    <div class="commit-modal-title" id="commitModalTitle">提交中...</div>
+    <div class="commit-modal-body" id="commitModalBody"></div>
+    <div class="commit-modal-steps" id="commitModalSteps"></div>
+    <div class="commit-modal-actions" id="commitModalActions"></div>
+  </div>
+</div>
+<div class="footer">
+  <span id="footerStatus">加载中...</span>
+  <div class="footer-actions">
+    <button type="button" class="btn btn-cancel" id="cancelBtn">取消并退出</button>
+    <button type="button" class="btn btn-submit" id="submitBtn">提交合并</button>
+  </div>
+</div>
+<script>
+let model = null;
+let currentFile = 0;
+let currentSheet = 0;
+let currentPage = 0;
+let decisions = {files: {}};
+let undoStack = [];
+const PAGE_SIZE = 500;
+
+const byId = id => document.getElementById(id);
+const fmtVal = value => value === null || value === undefined ? '' : String(value);
+function colLabel(n) { let s = ''; while (n > 0) { n--; s = String.fromCharCode(65 + n % 26) + s; n = Math.floor(n / 26); } return s; }
+function currentFileData() { return model && model.files[currentFile]; }
+function currentSheetData() { const file = currentFileData(); return file && file.diff.sheets[currentSheet]; }
+function fileDecision(file) {
+  if (!decisions.files[file.id]) decisions.files[file.id] = {sheets: {}};
+  return decisions.files[file.id];
+}
+function sheetDecision(file, sheet) {
+  const target = fileDecision(file).sheets;
+  if (!target[sheet.name]) target[sheet.name] = {cells: {}, rows: {}, columns: {}};
+  return target[sheet.name];
+}
+function cellKey(cell) { return cell.id || cell.coordinate; }
+function defaultCellChoice(cell) {
+  if (cell.resolution === 'conflict') return 'theirs';
+  if (cell.resolution === 'same') return cell.oursPresent === false ? 'theirs' : 'ours';
+  return cell.resolution;
+}
+function defaultSheetChoice(sheet) { return sheet.action.startsWith('conflict_') ? 'ours' : null; }
+function initializeDecisions() {
+  for (const file of model.files) {
+    const fileTarget = fileDecision(file);
+    if (file.macro) fileTarget.macro = file.macro.default || 'ours';
+    for (const sheet of file.diff.sheets) {
+      const target = sheetDecision(file, sheet);
+      const sheetChoice = defaultSheetChoice(sheet);
+      if (sheetChoice) target.sheet = sheetChoice;
+      if (sheet.renameStatus === 'rename_conflict') target.rename = 'ours';
+      if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') target.mergedCells = sheet.mergedCells.default || 'ours';
+      for (const row of sheet.allRows || sheet.rows || []) if (row.state === 'delete_modify') target.rows[row.id] = row.default;
+      for (const column of sheet.columns || []) if (column.state === 'delete_modify') target.columns[column.id] = column.default;
+      for (const cell of sheet.cells || []) target.cells[cell.id || cell.coordinate] = defaultCellChoice(cell);
+    }
+  }
+}
+function gridVal(sheet, row, col) {
+  const values = (sheet.contextRows || {})[String(row)];
+  return values ? values[col - 1] : '';
+}
+function enableHorizontalWheel(host) {
+  host.addEventListener('wheel', event => {
+    if (host.scrollWidth <= host.clientWidth || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    host.scrollLeft += event.deltaY;
+  }, {passive: false});
+}
+
+async function init() {
+  const response = await fetch('/api/diff');
+  model = await response.json();
+  if (!model.files || model.files.length === 0) {
+    byId('footerStatus').textContent = '未发现冲突。';
+    return;
+  }
+  initializeDecisions();
+  render();
+}
+
+function render() {
+  renderFileTabs();
+  renderSheetTabs();
+  renderSheetChoice();
+  renderTable();
+  updateStats();
+}
+function renderFileTabs() {
+  const host = byId('fileTabs');
+  host.replaceChildren();
+  model.files.forEach((file, index) => {
+    const tab = document.createElement('div');
+    tab.className = 'file-tab' + (index === currentFile ? ' active' : '') + (file.diff.summary.changedCellCount ? ' has-conflicts' : '');
+    tab.textContent = file.path;
+    tab.onclick = () => { currentFile = index; currentSheet = 0; currentPage = 0; render(); };
+    host.append(tab);
+  });
+}
+function sheetDecisionCount(file, sheet) {
+  if (sheet.action.startsWith('conflict_')) return 1;
+  if (sheet.action !== 'merge') return 1;
+  let total = sheet.renameStatus === 'rename_conflict' ? 1 : 0;
+  if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') total++;
+  total += (sheet.allRows || sheet.rows || []).filter(axis => axis.state === 'delete_modify').length;
+  total += (sheet.columns || []).filter(axis => axis.state === 'delete_modify').length;
+  for (const cell of sheet.cells || []) {
+    if (!sheet.columns || !sheet.allRows || structuralCellSelectable(file, sheet, cell)) total++;
+  }
+  return total;
+}
+function renderSheetTabs() {
+  const host = byId('sheetTabs');
+  host.replaceChildren();
+  const file = currentFileData();
+  // 只显示需要处理的 Sheet（needsAttention=false 的无冲突/无更改 Sheet 折叠）
+  const visible = [];
+  file.diff.sheets.forEach((sheet, index) => {
+    if (sheet.needsAttention === false) return;
+    visible.push({ sheet, index });
+  });
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'sheet-tab';
+    empty.textContent = '该文件没有需要处理的 Sheet';
+    host.append(empty);
+    return;
+  }
+  const current = file.diff.sheets[currentSheet];
+  if (!current || current.needsAttention === false) {
+    currentSheet = visible[0].index;
+  }
+  visible.forEach(({ sheet, index }) => {
+    const tab = document.createElement('div');
+    const added = sheet.action === 'auto_add_theirs';
+    const deleted = sheet.action === 'auto_delete';
+    const structuralConflict = sheet.action.startsWith('conflict_') || sheet.renameStatus === 'rename_conflict' || (sheet.structuralConflictCount || 0) > 0;
+    tab.className = 'sheet-tab' + (index === currentSheet ? ' active' : '') + (added ? ' sheet-added' : '') + (deleted ? ' sheet-deleted' : '') + (structuralConflict ? ' sheet-structural-conflict' : '');
+    tab.append(document.createTextNode(sheet.name));
+    const count = document.createElement('span');
+    count.className = 'tab-count';
+    count.textContent = sheetDecisionCount(file, sheet);
+    tab.append(count);
+    tab.onclick = () => { currentSheet = index; currentPage = 0; render(); };
+    host.append(tab);
+  });
+}
+function renderSheetChoice() {
+  const host = byId('sheetChoice'); host.replaceChildren();
+  const file = currentFileData(); const sheet = currentSheetData();
+  const macro = file && file.macro;
+  if (macro && macro.status !== 'same') {
+    const label = document.createElement('span'); label.className = 'macro-label'; label.textContent = 'VBA/ActiveX';
+    host.append(label);
+    if (macro.status === 'conflict') {
+      const selected = fileDecision(file).macro || macro.default;
+      const local = document.createElement('button');
+      local.className = 'btn btn-local macro-toggle' + (selected === 'ours' ? ' is-selected' : '');
+      local.textContent = '本地宏'; local.onclick = () => chooseMacro(file, 'ours');
+      const remote = document.createElement('button');
+      remote.className = 'btn btn-remote macro-toggle' + (selected === 'theirs' ? ' is-selected' : '');
+      remote.textContent = '远端宏'; remote.onclick = () => chooseMacro(file, 'theirs');
+      host.append(local, remote);
+    } else {
+      const note = document.createElement('span'); note.className = 'macro-note';
+      note.textContent = macro.status === 'auto_theirs'
+        ? '仅远端变更，自动采用远端宏'
+        : macro.status === 'auto_ours'
+          ? '仅本地变更，自动采用本地宏'
+          : '两边宏包结构不同，安全保留本地宏';
+      host.append(note);
+    }
+  }
+  if (!sheet) return;
+  const target = sheetDecision(file, sheet);
+  if (sheet.renameStatus === 'rename_conflict') {
+    const local = document.createElement('button'); local.className = 'structure-toggle' + (target.rename === 'ours' ? '' : ' is-delete');
+    local.textContent = `本地名：${sheet.names.ours}`; local.onclick = () => chooseRename(file, sheet, 'ours');
+    const remote = document.createElement('button'); remote.className = 'structure-toggle' + (target.rename === 'theirs' ? '' : ' is-delete');
+    remote.textContent = `远端名：${sheet.names.theirs}`; remote.onclick = () => chooseRename(file, sheet, 'theirs');
+    host.append(local, remote);
+  }
+  if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') {
+    const label = document.createElement('span'); label.className = 'macro-label'; label.textContent = '合并表头';
+    const local = document.createElement('button');
+    local.className = 'btn btn-local macro-toggle' + (target.mergedCells === 'ours' ? ' is-selected' : '');
+    local.textContent = '本地结构'; local.onclick = () => chooseMergedCells(file, sheet, 'ours');
+    const remote = document.createElement('button');
+    remote.className = 'btn btn-remote macro-toggle' + (target.mergedCells === 'theirs' ? ' is-selected' : '');
+    remote.textContent = '远端结构'; remote.onclick = () => chooseMergedCells(file, sheet, 'theirs');
+    host.append(label, local, remote);
+  }
+}
+
+function appendHeaderCell(row, value, onClick, className) {
+  const cell = document.createElement('th');
+  cell.textContent = value;
+  if (className) cell.className = className;
+  if (onClick) cell.onclick = onClick;
+  row.append(cell);
+  return cell;
+}
+function bindTip(cell, row, col) {
+  cell.onmouseenter = event => showTip(event, row, col);
+  cell.onmousemove = event => positionTip(event);
+  cell.onmouseleave = hideTip;
+}
+function renderTable() {
+  const file = currentFileData();
+  const sheet = currentSheetData();
+  const host = byId('tableContainer');
+  host.replaceChildren();
+  if (!sheet) {
+    renderMessage(host, '无需处理', '两侧工作簿内容一致，没有需要展示的 Sheet 差异。');
+    return;
+  }
+  if (sheet.action.startsWith('conflict_')) {
+    renderSheetConflict(host, file, sheet);
+    return;
+  }
+  if (sheet.action !== 'merge') {
+    const labels = {
+      auto_add_ours: '该 Sheet 仅存在于本地，将自动保留本地版本。',
+      auto_add_theirs: '该 Sheet 仅存在于远端，将自动保留远端版本。',
+      auto_delete: '该 Sheet 的删除只发生在一侧，另一侧未修改，将自动删除。'
+    };
+    renderMessage(host, sheet.name, labels[sheet.action] || `将自动执行：${sheet.action}`);
+    return;
+  }
+  renderDiffTable(host, file, sheet);
+}
+function renderMessage(host, title, message) {
+  const box = document.createElement('div');
+  box.className = 'sheet-message';
+  const heading = document.createElement('h2'); heading.textContent = title;
+  const body = document.createElement('p'); body.textContent = message;
+  box.append(heading, body); host.append(box);
+}
+function renderSheetConflict(host, file, sheet) {
+  const box = document.createElement('div');
+  box.className = 'sheet-message';
+  const heading = document.createElement('h2'); heading.textContent = `${sheet.name}：删除 / 修改冲突`;
+  const body = document.createElement('p');
+  body.textContent = '一侧删除了整个 Sheet，另一侧继续修改。选择某一侧后，将按该侧实际状态保留或删除 Sheet。';
+  const target = sheetDecision(file, sheet);
+  const names = sheet.names || {};
+  const local = document.createElement('button');
+  const localLabel = names.ours ? '保留 Sheet（本地）' : '删除 Sheet（本地）';
+  local.className = 'btn btn-local'; local.textContent = target.sheet === 'ours' ? `✓ ${localLabel}` : localLabel;
+  local.onclick = () => chooseSheet(file, sheet, 'ours');
+  const remote = document.createElement('button');
+  const remoteLabel = names.theirs ? '保留 Sheet（远端）' : '删除 Sheet（远端）';
+  remote.className = 'btn btn-remote'; remote.textContent = target.sheet === 'theirs' ? `✓ ${remoteLabel}` : remoteLabel;
+  remote.onclick = () => chooseSheet(file, sheet, 'theirs');
+  box.append(heading, body, local, document.createTextNode('  '), remote); host.append(box);
+}
+function axisChoice(file, sheet, kind, axis) {
+  if (axis.state !== 'delete_modify') return axis.default;
+  return sheetDecision(file, sheet)[kind][axis.id] || axis.default;
+}
+function axisKept(file, sheet, kind, axis) { return axisChoice(file, sheet, kind, axis) !== 'delete'; }
+function axisClass(file, sheet, kind, axis) {
+  if (axis.state === 'deleted' || !axisKept(file, sheet, kind, axis)) return ' axis-tombstone';
+  if (axis.state === 'added' && axis.incoming) return ' axis-added-incoming';
+  return '';
+}
+function axisSource(axis, kind) {
+  if (kind === 'rows') return `Base ${axis.baseRow ?? '—'} · 本地 ${axis.oursRow ?? '—'} · 远端 ${axis.theirsRow ?? '—'}`;
+  return `Base ${axis.baseColumn ?? '—'} · 本地 ${axis.oursColumn ?? '—'} · 远端 ${axis.theirsColumn ?? '—'}`;
+}
+function structuralOutputMaps(file, sheet) {
+  const headerCount = (sheet.headerRows || []).length;
+  const rows = new Map(); const columns = new Map(); let rowIndex = headerCount; let columnIndex = 0;
+  for (const row of sheet.allRows || []) if (axisKept(file, sheet, 'rows', row)) rows.set(row.id, ++rowIndex);
+  for (const column of sheet.columns || []) if (axisKept(file, sheet, 'columns', column)) columns.set(column.id, colLabel(++columnIndex));
+  return {rows, columns};
+}
+function structuralCellSelectable(file, sheet, cell) {
+  if (!cell || !cell.changed || cell.selectable === false) return false;
+  const row = (sheet.allRows || []).find(item => item.id === cell.rowId);
+  const column = (sheet.columns || []).find(item => item.id === cell.colId);
+  return !!row && !!column && !row.locked && !column.locked
+    && axisKept(file, sheet, 'rows', row) && axisKept(file, sheet, 'columns', column);
+}
+function defaultDisplayChoice(cell) {
+  const choice = defaultCellChoice(cell);
+  if (choice === 'same') return cell.oursPresent ? 'ours' : 'theirs';
+  return choice;
+}
+function structuralCellValue(target, cell) {
+  const choice = target.cells[cell.id] || defaultDisplayChoice(cell);
+  if (choice === 'ours' && cell.oursPresent) return cell.ours;
+  if (choice === 'theirs' && cell.theirsPresent) return cell.theirs;
+  if (cell.oursPresent) return cell.ours;
+  if (cell.theirsPresent) return cell.theirs;
+  return cell.base;
+}
+function appendStructureControl(row, file, sheet, kind, axis) {
+  const cell = document.createElement('th'); cell.className = 'structure-control' + axisClass(file, sheet, kind, axis);
+  cell.title = axisSource(axis, kind);
+  if (axis.state === 'delete_modify') {
+    const button = document.createElement('button'); const kept = axisKept(file, sheet, kind, axis);
+    button.className = 'structure-toggle' + (kept ? '' : ' is-delete');
+    button.textContent = kept ? '已保留' : '已删除'; button.onclick = event => { event.stopPropagation(); toggleAxis(file, sheet, kind, axis); };
+    cell.append(button);
+  } else if (axis.state === 'added') {
+    const badge = document.createElement('span'); badge.className = `structure-badge ${axis.incoming ? 'added' : 'local-existing'}`;
+    const source = kind === 'rows' ? (axis.theirsRow ?? axis.oursRow) : (axis.theirsColumn ?? axis.oursColumn);
+    badge.textContent = `${axis.incoming ? '远端新增' : '本地已有'} · ${source}`; cell.append(badge);
+  } else if (axis.state === 'deleted') {
+    const badge = document.createElement('span'); badge.className = 'structure-badge deleted';
+    badge.textContent = `已删除 · ${kind === 'rows' ? axis.baseRow : axis.baseColumn}`; cell.append(badge);
+  }
+  row.append(cell); return cell;
+}
+function renderDiffTable(host, file, sheet) {
+  if (sheet.columns && sheet.allRows) return renderStructuralTable(host, file, sheet);
+  return renderLegacyDiffTable(host, file, sheet);
+}
+function buildHeaderMergeMap(sheet, selection) {
+  // 构建 header cell 的合并映射：key = "rowIndex|colIndex" -> {isOrigin, colspan}
+  const mc = sheet.mergedCells || {};
+  let regions;
+  if (mc.status === 'conflict') {
+    const choice = (selection && selection.mergedCells) || mc.default || 'ours';
+    regions = mc[choice] || mc.ours || [];
+  } else {
+    regions = mc.resolved || [];
+  }
+  const columns = sheet.columns || [];
+  const headerRows = sheet.headerRows || [];
+  const headerRowNumbers = headerRows.map(r => r.row);
+  const map = {};
+  for (const region of regions) {
+    const rowIdxs = (region.rows || []).map(r => r.startsWith('header:') ? parseInt(r.slice(7)) : null).filter(r => r !== null);
+    const colIds = region.columns || [];
+    if (rowIdxs.length < 1 || colIds.length < 2) continue;
+    const colIdxs = colIds.map(cid => columns.findIndex(c => c.id === cid)).filter(i => i >= 0);
+    if (colIdxs.length < 2) continue;
+    const minCol = Math.min(...colIdxs);
+    const maxCol = Math.max(...colIdxs);
+    for (const rowNum of rowIdxs) {
+      const hrIdx = headerRowNumbers.indexOf(rowNum);
+      if (hrIdx < 0) continue;
+      map[`${rowNum}|${minCol}`] = {isOrigin: true, colspan: maxCol - minCol + 1};
+      for (let c = minCol + 1; c <= maxCol; c++) {
+        map[`${rowNum}|${c}`] = {isOrigin: false};
+      }
+    }
+  }
+  return map;
+}
+function renderStructuralTable(host, file, sheet) {
+  const columns = sheet.columns || []; const rows = sheet.rows || [];
+  if (!rows.length && !columns.length) { renderMessage(host, sheet.name, '该 Sheet 没有表内数据差异。'); return; }
+  const target = sheetDecision(file, sheet);
+  const output = structuralOutputMaps(file, sheet);
+  const grid = new Map((sheet.gridCells || []).map(cell => [`${cell.rowId}|${cell.colId}`, cell]));
+  const table = document.createElement('table'); table.className = 'diff-table';
+  const head = document.createElement('thead');
+  const controls = document.createElement('tr'); appendHeaderCell(controls, '结构', null, 'structure-control');
+  for (const column of columns) appendStructureControl(controls, file, sheet, 'columns', column);
+  head.append(controls);
+  const letters = document.createElement('tr'); appendHeaderCell(letters, '行');
+  for (const column of columns) {
+    const header = appendHeaderCell(letters, output.columns.get(column.id) || '×', () => bulkStructuralColumn(column.id));
+    header.className += axisClass(file, sheet, 'columns', column);
+    header.title = `${axisSource(column, 'columns')} · 合并后 ${output.columns.get(column.id) || '删除'}`;
+  }
+  head.append(letters);
+  const headerMergeMap = buildHeaderMergeMap(sheet, sheetDecision(file, sheet));
+  for (const headerRow of sheet.headerRows || []) {
+    const row = document.createElement('tr'); row.className = 'luban-header'; appendHeaderCell(row, String(headerRow.row));
+    headerRow.cells.forEach((value, index) => {
+      const merge = headerMergeMap[`${headerRow.row}|${index}`];
+      if (merge && !merge.isOrigin) return; // 被合并的格子跳过
+      const cell = appendHeaderCell(row, fmtVal(value));
+      cell.className += axisClass(file, sheet, 'columns', columns[index]);
+      if (merge && merge.colspan > 1) cell.colSpan = merge.colspan;
+    });
+    head.append(row);
+  }
+  table.append(head);
+  const body = document.createElement('tbody');
+  const start = currentPage * PAGE_SIZE; const end = Math.min(rows.length, start + PAGE_SIZE);
+  for (let index = start; index < end; index++) {
+    const axisRow = rows[index]; const row = document.createElement('tr');
+    const rowHeader = document.createElement('th'); rowHeader.className = 'row-header' + axisClass(file, sheet, 'rows', axisRow);
+    rowHeader.title = `${axisSource(axisRow, 'rows')} · 合并后 ${output.rows.get(axisRow.id) || '删除'}`;
+    const outputIndex = document.createElement('span'); outputIndex.className = 'axis-index' + (output.rows.has(axisRow.id) ? '' : ' is-removed');
+    outputIndex.textContent = output.rows.has(axisRow.id) ? String(output.rows.get(axisRow.id)) : '×'; rowHeader.append(outputIndex);
+    if (axisRow.state === 'delete_modify') {
+      const button = document.createElement('button'); const kept = axisKept(file, sheet, 'rows', axisRow);
+      button.className = 'structure-toggle' + (kept ? '' : ' is-delete'); button.textContent = kept ? '已保留' : '已删除';
+      button.onclick = event => { event.stopPropagation(); toggleAxis(file, sheet, 'rows', axisRow); }; rowHeader.append(button);
+    } else {
+      if (axisRow.state === 'added' || axisRow.state === 'deleted') {
+        const badge = document.createElement('span'); badge.className = `structure-badge ${axisRow.state}`;
+        badge.textContent = axisRow.state === 'added' ? (axisRow.incoming ? '远端新增' : '本地已有') : '已删除'; rowHeader.append(document.createTextNode(' '), badge);
+      }
+    }
+    const source = document.createElement('span'); source.className = 'axis-source'; source.textContent = axisSource(axisRow, 'rows'); rowHeader.append(source);
+    if (axisKept(file, sheet, 'rows', axisRow) && !axisRow.locked) rowHeader.onclick = () => bulkStructuralRow(axisRow.id);
+    row.append(rowHeader);
+    for (const column of columns) {
+      const cellData = grid.get(`${axisRow.id}|${column.id}`); const cell = document.createElement('td');
+      const kept = axisKept(file, sheet, 'rows', axisRow) && axisKept(file, sheet, 'columns', column);
+      const structurallyLocked = !kept || axisRow.locked || column.locked;
+      if (!kept || axisRow.state === 'deleted' || column.state === 'deleted') cell.className = 'axis-tombstone cell-locked';
+      else if ((axisRow.state === 'added' && axisRow.incoming) || (column.state === 'added' && column.incoming)) cell.className = 'axis-added-incoming cell-locked';
+      else if (axisRow.state === 'added' || column.state === 'added') cell.className = 'cell-no-conflict cell-locked';
+      else if (cellData && cellData.changed) {
+        const choice = target.cells[cellData.id] || defaultDisplayChoice(cellData);
+        const selectable = structuralCellSelectable(file, sheet, cellData);
+        cell.className = (choice === 'ours' ? 'cell-local' : 'cell-remote') + (selectable ? ' cell-selectable' : ' cell-locked');
+      } else cell.className = 'cell-no-conflict' + (structurallyLocked ? ' cell-locked' : '');
+      if (cellData) {
+        cell.textContent = fmtVal(structuralCellValue(target, cellData));
+        if (structuralCellSelectable(file, sheet, cellData)) cell.onclick = () => cycleCell(file, sheet, cellData);
+        bindStructuralTip(cell, file, sheet, axisRow, column, cellData);
+      }
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  table.append(body); host.append(table); if (rows.length > PAGE_SIZE) renderPager(host, rows.length);
+}
+function renderLegacyDiffTable(host, file, sheet) {
+  const changedCells = sheet.cells || [];
+  if (!changedCells.length) {
+    renderMessage(host, sheet.name, '该 Sheet 没有单元格差异。');
+    return;
+  }
+  const maxCol = sheet.maxCol || 1;
+  const changedMap = new Map(changedCells.map(cell => [`${cell.row},${cell.col}`, cell]));
+  const changedRows = [...new Set(changedCells.map(cell => cell.row))].sort((a, b) => a - b);
+  const a1 = gridVal(sheet, 1, 1);
+  const isVertical = typeof a1 === 'string' && a1.startsWith('##column##var');
+  const headerRows = [];
+  if (!isVertical) {
+    for (let row = 1; row <= 20; row++) {
+      const value = gridVal(sheet, row, 1);
+      if (typeof value === 'string' && value.startsWith('##')) headerRows.push(row);
+      else if (headerRows.length) break;
+    }
+  }
+
+  const table = document.createElement('table'); table.className = 'diff-table';
+  const head = document.createElement('thead');
+  const letters = document.createElement('tr'); appendHeaderCell(letters, '行');
+  for (let col = 1; col <= maxCol; col++) appendHeaderCell(letters, colLabel(col), () => bulkCol(col));
+  head.append(letters);
+  if (isVertical) {
+    const meanings = {1: '字段名 ##var', 2: '类型 ##type', 3: '注释'};
+    const row = document.createElement('tr'); row.className = 'luban-header'; appendHeaderCell(row, '列义');
+    for (let col = 1; col <= maxCol; col++) appendHeaderCell(row, meanings[col] || '');
+    head.append(row);
+  } else {
+    for (const headerRow of headerRows) {
+      const row = document.createElement('tr'); row.className = 'luban-header'; appendHeaderCell(row, String(headerRow));
+      for (let col = 1; col <= maxCol; col++) {
+        const cell = appendHeaderCell(row, fmtVal(gridVal(sheet, headerRow, col)));
+        bindTip(cell, headerRow, col);
+      }
+      head.append(row);
+    }
+  }
+  table.append(head);
+
+  const body = document.createElement('tbody');
+  const start = currentPage * PAGE_SIZE;
+  const end = Math.min(changedRows.length, start + PAGE_SIZE);
+  const target = sheetDecision(file, sheet);
+  for (let index = start; index < end; index++) {
+    const rowNumber = changedRows[index];
+    const row = document.createElement('tr');
+    appendHeaderCell(row, String(rowNumber), () => bulkRow(rowNumber), 'row-header');
+    for (let col = 1; col <= maxCol; col++) {
+      const key = `${rowNumber},${col}`;
+      const changed = changedMap.get(key);
+      const cell = document.createElement('td');
+      if (changed) {
+        const choice = target.cells[changed.coordinate] || defaultCellChoice(changed);
+        cell.className = choice === 'ours' ? 'cell-local' : 'cell-remote';
+        cell.textContent = fmtVal(choice === 'ours' ? changed.ours : changed.theirs);
+        cell.onclick = () => cycleCell(file, sheet, changed);
+      } else {
+        cell.className = 'cell-no-conflict';
+        cell.textContent = fmtVal(gridVal(sheet, rowNumber, col));
+      }
+      bindTip(cell, rowNumber, col);
+      row.append(cell);
+    }
+    body.append(row);
+  }
+  table.append(body); host.append(table);
+  if (changedRows.length > PAGE_SIZE) renderPager(host, changedRows.length);
+}
+function renderPager(host, totalRows) {
+  const pages = Math.ceil(totalRows / PAGE_SIZE);
+  const pager = document.createElement('div'); pager.className = 'pager';
+  for (let page = 0; page < pages; page++) {
+    const button = document.createElement('button');
+    button.className = 'btn' + (page === currentPage ? ' btn-local' : '');
+    button.textContent = String(page + 1);
+    button.onclick = () => { currentPage = page; renderTable(); };
+    pager.append(button);
+  }
+  host.append(pager);
+}
+
+function changedCellAt(sheet, row, col) { return (sheet.cells || []).find(cell => cell.row === row && cell.col === col); }
+function bindStructuralTip(cell, file, sheet, row, column, data) {
+  cell.onmouseenter = event => showStructuralTip(event, file, sheet, row, column, data);
+  cell.onmousemove = event => positionTip(event); cell.onmouseleave = hideTip;
+}
+function addTipLine(host, className, label, value, author, date) {
+  const line = document.createElement('div'); line.className = className;
+  line.append(document.createTextNode(`${label}: ${fmtVal(value)}`));
+  const metaParts = [];
+  if (author) metaParts.push(`作者: ${author}`);
+  if (date) metaParts.push(date);
+  if (metaParts.length) { const span = document.createElement('span'); span.className = 'author'; span.textContent = metaParts.join('  '); line.append(span); }
+  host.append(line);
+}
+function showTip(event, row, col) {
+  const file = currentFileData(); const sheet = currentSheetData(); const changed = changedCellAt(sheet, row, col);
+  const tip = byId('tooltip'); tip.replaceChildren();
+  const label = document.createElement('div'); label.className = 'label';
+  label.textContent = `${file.path} / ${sheet.name} / 第 ${row} 行, ${colLabel(col)} 列`;
+  tip.append(label);
+  if (changed) {
+    const choice = sheetDecision(file, sheet).cells[changed.coordinate] || defaultCellChoice(changed);
+    addTipLine(tip, 'val-base', '基线', changed.base, '');
+    addTipLine(tip, 'val-local', '本地', changed.ours, file.oursAuthor, file.oursDate);
+    addTipLine(tip, 'val-remote', '远端', changed.theirs, file.theirsAuthor, file.theirsDate);
+    addTipLine(tip, 'val-current', '当前选择', choice === 'ours' ? '本地' : '远端', '');
+    if (changed.resolution !== 'conflict') addTipLine(tip, 'label', '三方建议', changed.resolution === 'ours' ? '自动采用本地' : '自动采用远端', '');
+  } else {
+    addTipLine(tip, 'val-current', '值', gridVal(sheet, row, col), '');
+  }
+  tip.style.display = 'block'; positionTip(event);
+}
+function showStructuralTip(event, file, sheet, row, column, cell) {
+  const tip = byId('tooltip'); tip.replaceChildren();
+  const label = document.createElement('div'); label.className = 'label';
+  label.textContent = `${file.path} / ${sheet.name} / ${row.id} / ${column.id}`; tip.append(label);
+  addTipLine(tip, 'val-base', '基线', cell.base, '');
+  addTipLine(tip, 'val-local', '本地', cell.ours, file.oursAuthor, file.oursDate);
+  addTipLine(tip, 'val-remote', '远端', cell.theirs, file.theirsAuthor, file.theirsDate);
+  const choice = sheetDecision(file, sheet).cells[cell.id] || defaultDisplayChoice(cell);
+  addTipLine(tip, 'val-current', '当前选择', choice === 'ours' ? '本地' : '远端', '');
+  addTipLine(tip, 'label', '行来源', axisSource(row, 'rows'), '');
+  addTipLine(tip, 'label', '列来源', axisSource(column, 'columns'), '');
+  if (row.state !== 'common') addTipLine(tip, 'label', '行状态', row.status, '');
+  if (column.state !== 'common') addTipLine(tip, 'label', '列状态', column.status, '');
+  addTipLine(tip, 'label', '交互', structuralCellSelectable(file, sheet, cell) ? '可点击切换版本' : '结构已锁定', '');
+  tip.style.display = 'block'; positionTip(event);
+}
+function positionTip(event) {
+  const tip = byId('tooltip');
+  const left = Math.min(event.clientX + 12, window.innerWidth - tip.offsetWidth - 12);
+  const top = Math.min(event.clientY + 12, window.innerHeight - tip.offsetHeight - 12);
+  tip.style.left = `${Math.max(8, left)}px`; tip.style.top = `${Math.max(8, top)}px`;
+}
+function hideTip() { byId('tooltip').style.display = 'none'; }
+
+function pushCellUndo(file, sheet, cell) {
+  const target = sheetDecision(file, sheet); const key = cellKey(cell); const previous = target.cells[key];
+  undoStack.push({kind: 'cell', fileId: file.id, sheet: sheet.name, key, previous});
+}
+function cycleCell(file, sheet, cell) {
+  const target = sheetDecision(file, sheet); pushCellUndo(file, sheet, cell);
+  const key = cellKey(cell);
+  target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
+  renderTable(); updateStats();
+}
+function chooseSheet(file, sheet, side) {
+  const target = sheetDecision(file, sheet);
+  undoStack.push({kind: 'sheet', fileId: file.id, sheet: sheet.name, previous: target.sheet});
+  target.sheet = side; renderTable(); updateStats();
+}
+function chooseRename(file, sheet, side) {
+  const target = sheetDecision(file, sheet);
+  undoStack.push({kind: 'rename', fileId: file.id, sheet: sheet.name, previous: target.rename});
+  target.rename = side; renderSheetChoice(); updateStats();
+}
+function chooseMergedCells(file, sheet, side) {
+  const target = sheetDecision(file, sheet);
+  undoStack.push({kind: 'mergedCells', fileId: file.id, sheet: sheet.name, previous: target.mergedCells});
+  target.mergedCells = side; renderSheetChoice(); renderTable(); updateStats();
+}
+function toggleAxis(file, sheet, kind, axis) {
+  const target = sheetDecision(file, sheet); const previous = target[kind][axis.id] || axis.default;
+  undoStack.push({kind: 'axis', fileId: file.id, sheet: sheet.name, axisKind: kind, axisId: axis.id, previous});
+  target[kind][axis.id] = previous === 'keep' ? 'delete' : 'keep';
+  renderSheetTabs(); renderTable(); updateStats();
+}
+function chooseMacro(file, side) {
+  const target = fileDecision(file); const previous = target.macro || file.macro.default;
+  if (side === 'theirs' && !file.macro.canChooseTheirs) return;
+  undoStack.push({kind: 'macro', fileId: file.id, previous});
+  target.macro = side; render();
+}
+function sideAxisChoice(axis, side) {
+  const key = side === 'ours' ? ['oursRow', 'oursCol'] : ['theirsRow', 'theirsCol'];
+  return key.some(name => axis[name] !== undefined && axis[name] !== null) ? 'keep' : 'delete';
+}
+function bulkChoose(side) {
+  const file = currentFileData(); const sheet = currentSheetData(); if (!sheet) return;
+  if (file.macro && file.macro.status === 'conflict' && (side !== 'theirs' || file.macro.canChooseTheirs)) {
+    const fileTarget = fileDecision(file);
+    undoStack.push({kind: 'macro', fileId: file.id, previous: fileTarget.macro || file.macro.default});
+    fileTarget.macro = side;
+  }
+  if (sheet.action.startsWith('conflict_')) { chooseSheet(file, sheet, side); return; }
+  const target = sheetDecision(file, sheet);
+  if (sheet.renameStatus === 'rename_conflict') {
+    undoStack.push({kind: 'rename', fileId: file.id, sheet: sheet.name, previous: target.rename});
+    target.rename = side;
+  }
+  if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') {
+    undoStack.push({kind: 'mergedCells', fileId: file.id, sheet: sheet.name, previous: target.mergedCells});
+    target.mergedCells = side;
+  }
+  for (const [kind, axes] of [['rows', sheet.allRows || sheet.rows || []], ['columns', sheet.columns || []]]) {
+    for (const axis of axes) if (axis.state === 'delete_modify') {
+      undoStack.push({kind: 'axis', fileId: file.id, sheet: sheet.name, axisKind: kind, axisId: axis.id, previous: target[kind][axis.id]});
+      target[kind][axis.id] = sideAxisChoice(axis, side);
+    }
+  }
+  for (const cell of sheet.cells || []) {
+    const key = cellKey(cell); const selected = side === 'ours' ? cell.oursPresent !== false : cell.theirsPresent !== false;
+    if (!selected) continue;
+    pushCellUndo(file, sheet, cell); target.cells[key] = side;
+  }
+  render();
+}
+function bulkStructuralRow(rowId) {
+  const file = currentFileData(); const sheet = currentSheetData(); const target = sheetDecision(file, sheet);
+  const row = (sheet.allRows || []).find(item => item.id === rowId);
+  if (!row || !axisKept(file, sheet, 'rows', row)) return;
+  for (const cell of (sheet.cells || []).filter(item => item.rowId === rowId)) {
+    const column = (sheet.columns || []).find(item => item.id === cell.colId);
+    if (!column || !axisKept(file, sheet, 'columns', column) || row.locked || column.locked) continue;
+    pushCellUndo(file, sheet, cell); const key = cellKey(cell);
+    target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
+  }
+  renderTable(); updateStats();
+}
+function bulkStructuralColumn(columnId) {
+  const file = currentFileData(); const sheet = currentSheetData(); const target = sheetDecision(file, sheet);
+  const column = (sheet.columns || []).find(item => item.id === columnId);
+  if (!column || !axisKept(file, sheet, 'columns', column)) return;
+  for (const cell of (sheet.cells || []).filter(item => item.colId === columnId)) {
+    const row = (sheet.allRows || []).find(item => item.id === cell.rowId);
+    if (!row || !axisKept(file, sheet, 'rows', row) || row.locked || column.locked) continue;
+    pushCellUndo(file, sheet, cell); const key = cellKey(cell);
+    target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
+  }
+  renderTable(); updateStats();
+}
+function bulkRow(row) {
+  const file = currentFileData(); const sheet = currentSheetData();
+  for (const cell of (sheet.cells || []).filter(item => item.row === row)) {
+    const target = sheetDecision(file, sheet); pushCellUndo(file, sheet, cell);
+    const key = cellKey(cell); target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
+  }
+  renderTable(); updateStats();
+}
+function bulkCol(col) {
+  const file = currentFileData(); const sheet = currentSheetData();
+  for (const cell of (sheet.cells || []).filter(item => item.col === col)) {
+    const target = sheetDecision(file, sheet); pushCellUndo(file, sheet, cell);
+    const key = cellKey(cell); target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
+  }
+  renderTable(); updateStats();
+}
+function undo() {
+  const action = undoStack.pop(); if (!action) return;
+  const file = model.files.find(item => item.id === action.fileId);
+  if (action.kind === 'macro') { fileDecision(file).macro = action.previous; render(); return; }
+  const sheet = file.diff.sheets.find(item => item.name === action.sheet);
+  const target = sheetDecision(file, sheet);
+  if (action.kind === 'sheet') target.sheet = action.previous;
+  else if (action.kind === 'rename') target.rename = action.previous;
+  else if (action.kind === 'mergedCells') target.mergedCells = action.previous;
+  else if (action.kind === 'axis') target[action.axisKind][action.axisId] = action.previous;
+  else target.cells[action.key] = action.previous;
+  render();
+}
+function resetFile() {
+  const file = currentFileData();
+  if (file.macro) fileDecision(file).macro = file.macro.default || 'ours';
+  for (const sheet of file.diff.sheets) {
+    const target = sheetDecision(file, sheet); const sheetChoice = defaultSheetChoice(sheet);
+    if (sheetChoice) target.sheet = sheetChoice;
+    if (sheet.renameStatus === 'rename_conflict') target.rename = 'ours';
+    if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') target.mergedCells = sheet.mergedCells.default || 'ours';
+    target.rows = {}; target.columns = {};
+    for (const row of sheet.allRows || sheet.rows || []) if (row.state === 'delete_modify') target.rows[row.id] = row.default;
+    for (const column of sheet.columns || []) if (column.state === 'delete_modify') target.columns[column.id] = column.default;
+    for (const cell of sheet.cells || []) target.cells[cellKey(cell)] = defaultCellChoice(cell);
+  }
+  undoStack = []; render();
+}
+function updateStats() {
+  let total = 0; let local = 0;
+  for (const file of model.files) {
+    if (file.macro && file.macro.status === 'conflict') {
+      total++; if ((fileDecision(file).macro || file.macro.default) === 'ours') local++;
+    }
+    for (const sheet of file.diff.sheets) {
+    const target = sheetDecision(file, sheet);
+    if (sheet.action.startsWith('conflict_')) { total++; if (target.sheet === 'ours') local++; }
+    if (sheet.renameStatus === 'rename_conflict') { total++; if (target.rename === 'ours') local++; }
+    if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') { total++; if (target.mergedCells === 'ours') local++; }
+    for (const row of sheet.allRows || sheet.rows || []) if (row.state === 'delete_modify') {
+      total++; const oursChoice = row.oursRow !== null && row.oursRow !== undefined ? 'keep' : 'delete';
+      if ((target.rows[row.id] || row.default) === oursChoice) local++;
+    }
+    for (const column of sheet.columns || []) if (column.state === 'delete_modify') {
+      total++; const oursChoice = column.oursCol !== null && column.oursCol !== undefined ? 'keep' : 'delete';
+      if ((target.columns[column.id] || column.default) === oursChoice) local++;
+    }
+    for (const cell of sheet.cells || []) {
+      if (sheet.columns && sheet.allRows && !structuralCellSelectable(file, sheet, cell)) continue;
+      total++; if (target.cells[cellKey(cell)] === 'ours') local++;
+    }
+    }
+  }
+  byId('localCount').textContent = String(local); byId('totalCount').textContent = String(total);
+  const file = currentFileData(); const sheet = currentSheetData();
+  byId('footerStatus').textContent = `共 ${total} 个可决策项，${local} 项采用本地 · 当前：${file.path}${sheet ? ` / ${sheet.name}` : ''}`;
+}
+
+function renderCommitSteps(steps) {
+  const host = byId('commitModalSteps'); host.replaceChildren();
+  for (const step of steps || []) {
+    const line = document.createElement('div');
+    line.textContent = `${step.success ? '✓' : '✗'} ${step.step || ''}${step.output ? ` — ${String(step.output).slice(0, 240)}` : ''}`;
+    host.append(line);
+  }
+}
+function showCommitModal(kind, title, body, steps, buttons) {
+  const modal = byId('commitModal'); modal.classList.remove('is-hidden', 'is-success', 'is-error');
+  if (kind) modal.classList.add(`is-${kind}`);
+  byId('commitModalTitle').textContent = title; byId('commitModalBody').textContent = body || ''; renderCommitSteps(steps);
+  const actions = byId('commitModalActions'); actions.replaceChildren();
+  for (const spec of buttons || []) { const button = document.createElement('button'); button.className = `btn ${spec.className || ''}`; button.textContent = spec.label; button.onclick = spec.onclick; actions.append(button); }
+}
+function closeCommitModal() { byId('commitModal').classList.add('is-hidden'); }
+async function cancelAndExit() {
+  const cancelButton = byId('cancelBtn');
+  const submitButton = byId('submitBtn');
+  cancelButton.disabled = true;
+  submitButton.disabled = true;
+  byId('footerStatus').textContent = '正在取消并退出，不会写入任何更改...';
+  try {
+    const response = await fetch('/api/shutdown', {method: 'POST'});
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || '无法关闭解析器');
+    byId('footerStatus').textContent = '已取消，未写入任何更改。';
+    window.close();
+  } catch (error) {
+    cancelButton.disabled = false;
+    submitButton.disabled = false;
+    byId('footerStatus').textContent = `退出失败: ${error.message}`;
+  }
+}
+function renderCommitMessage(text) {
+  const host = byId('commitModalSteps'); host.replaceChildren();
+  const line = document.createElement('div');
+  line.textContent = text || '（无冲突 Cell，将使用默认提交信息）';
+  host.append(line);
+}
+async function submitResolve() {
+  const button = byId('submitBtn');
+  button.disabled = true;
+  byId('footerStatus').textContent = '正在生成 commit 信息预览...';
+  try {
+    const previewResponse = await fetch('/api/commit-preview', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decisions})
+    });
+    const preview = await previewResponse.json();
+    if (!previewResponse.ok || preview.error) throw new Error(preview.error || '无法生成 commit 信息');
+    // 居中二次确认：展示 commit 信息列表（可滑动），确认后才真正执行 add / commit
+    showCommitModal('', '确认提交', '请核对以下 commit 信息，确认后将执行 git add / commit：', [], [
+      {label: '取消', className: '', onclick: () => { closeCommitModal(); button.disabled = false; byId('footerStatus').textContent = '已取消，未提交任何更改。'; }},
+      {label: '确认提交', className: 'btn-submit', onclick: () => { closeCommitModal(); doSubmitResolve(); }}
+    ]);
+    renderCommitMessage(preview.message || '');
+  } catch (error) {
+    button.disabled = false;
+    byId('footerStatus').textContent = `错误: ${error.message}`;
+  }
+}
+async function doSubmitResolve() {
+  byId('footerStatus').textContent = '正在合并并提交...';
+  showCommitModal('', '正在合并并提交...', '正在写回工作簿并执行 git add / commit，请稍候。', [], []);
+  try {
+    const response = await fetch('/api/resolve', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decisions, commit: true, push: false})
+    });
+    const result = await response.json();
+    if (!result.success) throw new Error(result.error || (result.steps || []).filter(step => !step.success).map(step => `${step.step}: ${step.output}`).join('\n') || '提交失败');
+    byId('footerStatus').textContent = '完成！合并并提交成功。';
+    showCommitModal('success', '提交成功', '多 Sheet 合并结果已写入并提交。解析器即将关闭。', result.steps, [
+      {label: '关闭窗口', className: 'btn-submit', onclick: () => { try { window.close(); } catch (_) {} }}
+    ]);
+  } catch (error) {
+    const c = byId('submitBtn'); c.disabled = false; byId('footerStatus').textContent = `错误: ${error.message}`;
+    showCommitModal('error', '提交失败', error.message, [], [{label: '关闭', onclick: closeCommitModal}]);
+  }
+}
+
+byId('allLocalBtn').onclick = () => bulkChoose('ours');
+byId('allRemoteBtn').onclick = () => bulkChoose('theirs');
+byId('undoBtn').onclick = undo;
+byId('resetBtn').onclick = resetFile;
+byId('cancelBtn').onclick = cancelAndExit;
+byId('submitBtn').onclick = submitResolve;
+enableHorizontalWheel(byId('fileTabs'));
+enableHorizontalWheel(byId('sheetTabs'));
+init().catch(error => { byId('footerStatus').textContent = `加载失败: ${error.message}`; });
+</script>
+</body>
+</html>

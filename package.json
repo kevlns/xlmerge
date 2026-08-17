@@ -1,0 +1,39 @@
+{
+  "name": "xlmerge",
+  "version": "1.2.0",
+  "description": "Visual resolver for unresolved Git merge conflicts in .xlsx/.xlsm workbooks: three-way sheet/row/cell diff, local UI, write-back and commit.",
+  "bin": {
+    "xlmerge": "bin/xlmerge.js"
+  },
+  "files": [
+    "bin/",
+    "skill/",
+    "python/"
+  ],
+  "scripts": {
+    "test": "node bin/xlmerge.js --selfcheck",
+    "test:python": "python -m unittest discover -s python/tests -v"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kevlns/xlmerge.git"
+  },
+  "homepage": "https://github.com/kevlns/xlmerge#readme",
+  "bugs": {
+    "url": "https://github.com/kevlns/xlmerge/issues"
+  },
+  "author": "kevlns <936277610@qq.com>",
+  "engines": {
+    "node": ">=16"
+  },
+  "private": true,
+  "license": "MIT",
+  "keywords": [
+    "xlsx",
+    "xlsm",
+    "git",
+    "merge-conflict",
+    "excel",
+    "agent-skill"
+  ]
+}

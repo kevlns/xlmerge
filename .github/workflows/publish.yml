@@ -1,0 +1,32 @@
+name: publish
+
+# 推 v* 标签时发布到 npm。
+# 前置：1) 移除 package.json 中的 "private": true  2) 在仓库 Settings > Secrets 配置 NPM_TOKEN
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install openpyxl==3.1.5 bottle==0.13.4
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "ci"
+      - name: Unit tests
+        run: python -m unittest discover -s python/tests
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
