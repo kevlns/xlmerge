@@ -14,7 +14,7 @@ xlmerge --repo <repo> detect
 xlmerge --repo <repo> launch
 ```
 
-`npx` 方式等价：`npx xlmerge --repo <repo> detect`。
+`npx` 方式等价：`npx --package @kevlns/xlmerge@beta xlmerge --repo <repo> detect`。
 
 ## 最高优先级快速流程
 

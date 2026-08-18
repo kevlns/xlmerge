@@ -1,6 +1,6 @@
 {
-  "name": "xlmerge",
-  "version": "1.2.0",
+  "name": "@kevlns/xlmerge",
+  "version": "1.2.1-beta.2",
   "description": "Visual resolver for unresolved Git merge conflicts in .xlsx/.xlsm workbooks: three-way sheet/row/cell diff, local UI, write-back and commit.",
   "bin": {
     "xlmerge": "bin/xlmerge.js"
@@ -8,11 +8,17 @@
   "files": [
     "bin/",
     "skill/",
-    "python/"
+    "python/xlsx_merge_engine/",
+    "python/xlsx_resolver/",
+    "v-cli.plugin.json"
   ],
+  "vCli": {
+    "manifest": "v-cli.plugin.json"
+  },
   "scripts": {
     "test": "node bin/xlmerge.js --selfcheck",
-    "test:python": "python -m unittest discover -s python/tests -v"
+    "test:python": "python -m unittest discover -s python/tests -v",
+    "check:manifest": "python -m unittest discover -s python/tests -p test_v_cli_plugin_manifest.py -v"
   },
   "repository": {
     "type": "git",
@@ -26,7 +32,10 @@
   "engines": {
     "node": ">=16"
   },
-  "private": true,
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT",
   "keywords": [
     "xlsx",

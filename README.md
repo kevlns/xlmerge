@@ -12,12 +12,14 @@
 ## 安装
 
 ```bash
-# 从 GitHub 仓库直接安装（当前推荐方式）
-npm install -g git+https://github.com/kevlns/xlmerge.git
+# beta 阶段请显式安装预发布版本
+npm install -g @kevlns/xlmerge@beta
 
-# 发布到 npm 后（计划中）
-npm install -g xlmerge
+# 或直接从 GitHub 仓库安装开发版本
+npm install -g git+https://github.com/kevlns/xlmerge.git
 ```
+
+发布稳定版并设置 `latest` 标签后，可直接使用 `npm install -g @kevlns/xlmerge`。
 
 要求：Node.js >= 16，系统 Python >= 3.9。首次运行若缺少依赖，会在 `~/.xlmerge/venv` 自动创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。
 
@@ -68,8 +70,11 @@ decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:
 ## 开发与测试
 
 ```bash
-# 单元测试（63 个，覆盖引擎与解析器全流程）
+# 单元测试（72 个，覆盖引擎与解析器全流程）
 python -m unittest discover -s python/tests -v
+
+# 校验 v-cli.plugin.json 与 CLI 解析器未漂移（命令/选项/副作用覆盖）
+npm run check:manifest
 
 # 端到端（构造真实冲突仓库 -> detect -> launch -> API 决策 -> 写回提交）
 python e2e_test.py bin/xlmerge.js node
@@ -83,11 +88,12 @@ npm pack
 ```
 bin/xlmerge.js                  # Node 启动垫片：探测 Python、按需建 venv、透传参数
 skill/SKILL.md                  # Agent Skill 文档
+v-cli.plugin.json               # Agent 插件清单（命令/选项/副作用），与 CLI 解析器做漂移校验
 python/
 ├── xlsx_merge_engine/          # 三方结构化差异引擎（可独立 CLI 调试）
 │   └── xlsx_git_merge_bridge.py
 ├── xlsx_resolver/              # 冲突解析器（detect/prepare/launch/apply + bottle UI）
-└── tests/                      # 引擎与解析器测试
+└── tests/                      # 引擎与解析器测试（不随 npm 包发布）
 ```
 
 > 注：为兼容嵌入式 Python 发行版（`._pth` 忽略 `PYTHONPATH`），模块内使用包内自举的 `sys.path` 注入而非纯包导入；这是有意为之。

@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 1,
+  "package": "@kevlns/xlmerge",
+  "command": "xlmerge",
+  "bin": "xlmerge",
+  "description": "Visual resolver for Git merge conflicts in .xlsx/.xlsm planning tables: three-way sheet/row/cell diff, local UI, write-back and commit.",
+  "platforms": ["darwin", "linux", "win32"],
+  "runtime": {
+    "node": ">=16",
+    "python": ">=3.9",
+    "pythonDependencies": ["openpyxl==3.1.5", "bottle==0.13.4"]
+  },
+  "environment": [
+    {
+      "name": "XLMERGE_PYTHON",
+      "description": "Python interpreter path; highest precedence, bypasses automatic discovery."
+    },
+    {
+      "name": "XLMERGE_VENV",
+      "description": "Directory for the on-demand user-level virtualenv (default: ~/.xlmerge/venv)."
+    }
+  ],
+  "agent": {
+    "whenToUse": "When a user asks to resolve Git merge conflicts in .xlsx/.xlsm planning or configuration tables (策划表/配置表冲突): run detect first; when count > 0 run launch and give the returned url to the user. Do not inspect workbook cells or summarize diffs yourself; the resolver owns diff, choices, write-back and commit.",
+    "globalOptions": [
+      {
+        "flags": "--repo <path>",
+        "description": "Git repository (default: current directory; searches upward for the Git root)."
+      },
+      {
+        "flags": "--runtime-dir <dir>",
+        "description": "Optional directory for extracted Git stage workbooks and manifest (default: system temp). Used by prepare, resolve and launch."
+      }
+    ],
+    "commands": [
+      {
+        "path": ["detect"],
+        "usage": "xlmerge --repo <repo> detect",
+        "description": "List unresolved .xlsx/.xlsm files in the repository.",
+        "arguments": [],
+        "options": [],
+        "output": {
+          "format": "json",
+          "description": "Object with ok, repo (absolute path), count and conflicts (array of {path, stages})."
+        },
+        "exitCodes": {
+          "0": "success",
+          "1": "error (e.g. not a Git repository)",
+          "2": "usage error"
+        },
+        "safety": ["read-only", "no-worktree-modification"]
+      },
+      {
+        "path": ["prepare"],
+        "usage": "xlmerge --repo <repo> prepare [--path <file>]",
+        "description": "Extract base/ours/theirs stage versions from the Git index and build a sheet-aware manifest.",
+        "arguments": [],
+        "options": [
+          {
+            "flags": "--path <file>",
+            "description": "Only prepare this repository-relative .xlsx/.xlsm path."
+          }
+        ],
+        "output": {
+          "format": "json",
+          "description": "Object with ok and manifest (absolute path to the manifest JSON)."
+        },
+        "exitCodes": {
+          "0": "success",
+          "1": "error (no conflicts found, not a Git repository, git failure)",
+          "2": "usage error"
+        },
+        "safety": ["writes-runtime-dir", "no-worktree-modification", "no-commit"]
+      },
+      {
+        "path": ["resolve"],
+        "usage": "xlmerge --repo <repo> resolve [--path <file>] [--no-browser]",
+        "description": "Prepare conflicts and serve the local visual resolver in the foreground (blocking).",
+        "arguments": [],
+        "options": [
+          {
+            "flags": "--path <file>",
+            "description": "Only resolve this repository-relative .xlsx/.xlsm path."
+          },
+          {
+            "flags": "--no-browser",
+            "description": "Print the URL instead of opening a browser."
+          }
+        ],
+        "output": {
+          "format": "stdout",
+          "description": "Prints MERGE_SERVER_URL=http://127.0.0.1:<port> then serves the UI on loopback until a resolution is applied (write-back + commit) and the server shuts down."
+        },
+        "exitCodes": {
+          "0": "success (resolution applied; server shut down after write-back)",
+          "1": "error (prepare failure or server stopped before a resolution was applied)",
+          "2": "usage error"
+        },
+        "safety": ["blocking", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree-via-ui", "commits-by-default-via-ui"]
+      },
+      {
+        "path": ["launch"],
+        "usage": "xlmerge --repo <repo> launch [--path <file>] [--no-browser]",
+        "description": "Prepare conflicts, start the visual resolver in the background and return its URL.",
+        "arguments": [],
+        "options": [
+          {
+            "flags": "--path <file>",
+            "description": "Only resolve this repository-relative .xlsx/.xlsm path."
+          },
+          {
+            "flags": "--no-browser",
+            "description": "Start the server without opening a browser."
+          }
+        ],
+        "output": {
+          "format": "json",
+          "description": "Object with ok, pid, url (http://127.0.0.1:<port>), manifest and stdout/stderr log file paths."
+        },
+        "exitCodes": {
+          "0": "success",
+          "1": "error (prepare failure or server did not report a URL within 15 seconds)",
+          "2": "usage error"
+        },
+        "safety": ["starts-background-server", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree-via-ui", "commits-by-default-via-ui"]
+      },
+      {
+        "path": ["apply"],
+        "usage": "xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.json> [--no-commit] [--push] [--message <text>]",
+        "description": "Write back decisions from a decisions JSON without launching the UI.",
+        "arguments": [],
+        "options": [
+          {
+            "flags": "--manifest <file>",
+            "description": "Required. Manifest JSON produced by prepare."
+          },
+          {
+            "flags": "--decisions <file>",
+            "description": "Required. Decisions JSON with per-file per-sheet cell, row, column, rename and macro choices keyed by logical IDs."
+          },
+          {
+            "flags": "--no-commit",
+            "description": "Skip git add/commit after writing merged workbooks."
+          },
+          {
+            "flags": "--push",
+            "description": "Push after committing (off by default)."
+          },
+          {
+            "flags": "--message <text>",
+            "description": "Override the auto-generated structured commit message."
+          }
+        ],
+        "output": {
+          "format": "json",
+          "description": "Result object with success and summary of written files and commit."
+        },
+        "exitCodes": {
+          "0": "success (including with --no-commit)",
+          "1": "error (invalid or incomplete decisions, git/OS failure)",
+          "2": "usage error"
+        },
+        "safety": ["writes-worktree", "commits-by-default", "pushes-only-with-flag"]
+      }
+    ]
+  }
+}

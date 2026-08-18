@@ -1,45 +1,59 @@
 name: publish
 
-# 推 v* 标签时发布到 npm。
-# 前置：1) 移除 package.json 中的 "private": true  2) 在仓库 Settings > Secrets 配置 NPM_TOKEN
+# 首次发布需在本地使用 2FA OTP 完成。包创建后，在 npm 包设置中将
+# GitHub Actions Trusted Publisher 绑定到本仓库的 publish.yml；后续推送
+# v* 标签时使用短期 OIDC 凭证发布，不保存长期 NPM_TOKEN。
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      - uses: actions/setup-python@v5
+          package-manager-cache: false
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Install deps
+      - name: Install Python dependencies
         run: pip install openpyxl==3.1.5 bottle==0.13.4
       - name: Configure git for tests
         run: |
           git config --global user.email "ci@example.com"
           git config --global user.name "ci"
       - name: Unit tests
-        run: python -m unittest discover -s python/tests
-      - name: Check publish readiness
-        id: ready
+        run: python -m unittest discover -s python/tests -v
+      - name: Shim selfcheck
+        run: npm test
+      - name: Check whether version already exists
+        id: release
+        shell: bash
         run: |
-          if grep -q '"private": true' package.json; then
-            echo "ready=false (package.json 仍为 private)"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          elif [ -z "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "ready=false (未配置 NPM_TOKEN)"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+          package=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          if npm view "$package@$version" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$package@$version already exists; skipping publish"
           else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish
-        if: steps.ready.outputs.ready == 'true'
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish with npm Trusted Publishing
+        if: steps.release.outputs.publish == 'true'
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [[ "$version" == *-* ]]; then
+            npm publish --tag beta
+          else
+            npm publish
+          fi
