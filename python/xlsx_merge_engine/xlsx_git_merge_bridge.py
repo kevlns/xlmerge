@@ -887,11 +887,17 @@ def _annotate_column_conflicts(
     return conflict_count
 
 
+def _write_text_lf(path: Path, content: str) -> None:
+    """3.9-compatible LF write (Path.write_text gained `newline` only in 3.10)."""
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
+
+
 def _write_projection(path: Path, rows: list[RowProjection]) -> None:
     content = "\n".join(row.text for row in rows)
     if content:
         content += "\n"
-    path.write_text(content, encoding="utf-8", newline="\n")
+    _write_text_lf(path, content)
 
 
 def _write_sidecar(path: Path, layout: SheetLayout, rows: list[RowProjection]) -> None:
@@ -1474,7 +1480,7 @@ def analyze_workbooks(
                 paths["ours"], paths["base"], paths["theirs"]
             )
             merge_output_path = sheet_dir / "git-merge-output.txt"
-            merge_output_path.write_text(merged_text, encoding="utf-8", newline="\n")
+            _write_text_lf(merge_output_path, merged_text)
             segments = _parse_merge(merged_text, projection_fields)
             conflict_count = sum(segment["type"] == "conflict" for segment in segments)
             total_conflicts += conflict_count
