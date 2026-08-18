@@ -101,10 +101,13 @@ class VCliPluginManifestTests(unittest.TestCase):
         self.assertEqual(package["bin"], {"xlmerge": "bin/xlmerge.js"})
         self.assertTrue((PACKAGE_ROOT / "bin" / "xlmerge.js").is_file())
         self.assertEqual(package["vCli"], {"manifest": "v-cli.plugin.json"})
-        for required in ("v-cli.plugin.json", "bin/", "skill/", "python/xlsx_merge_engine/", "python/xlsx_resolver/"):
+        for required in ("v-cli.plugin.json", "AGENTS.md", "bin/", "python/xlsx_merge_engine/", "python/xlsx_resolver/"):
             self.assertIn(required, package["files"])
-        for excluded in ("python/tests", "e2e_test.py", "python/tests/"):
+        for excluded in ("skill/", "python/tests", "e2e_test.py", "python/tests/"):
             self.assertNotIn(excluded, package["files"])
+        agent_doc = PACKAGE_ROOT / "AGENTS.md"
+        self.assertTrue(agent_doc.is_file())
+        self.assertTrue(agent_doc.read_text(encoding="utf-8").strip())
         # manifest is actually reachable at the pointer path
         self.assertTrue((PACKAGE_ROOT / package["vCli"]["manifest"]).is_file())
         # environment variables must be the ones the Node shim actually reads

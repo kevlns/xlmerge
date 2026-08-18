@@ -1,20 +1,28 @@
----
-name: xlmerge
-description: "Deterministic launcher for unresolved Git merge conflicts in planning-table .xlsx and .xlsm files. Use immediately whenever a user asks to handle 策划表冲突、配置表冲突、xlsx/xlsm merge conflict or multi-Sheet conflict: run the bundled detect command, then launch the bundled UI when conflicts exist. Do not inspect workbook cells, use a generic xlsx analysis flow, summarize the diff, or choose ours/theirs in the model; the resolver UI owns diff, user decisions, write-back and commit."
----
+# xlmerge Agent 使用规范
 
-# XLSX/XLSM Conflict Resolver（npm 通用版）
+> 本文件是 AI Agent 调用 xlmerge 的规范正本。完整参数以 `xlmerge --help` / 子命令 `--help` 与 `v-cli.plugin.json`（经 v-cli 路由时用 `v-cli agent describe xlmerge`）为准；本文件锁定使用场景、调用规范、快速流程与边界。
 
-> 处理任意 Git 仓库中未合并的 `.xlsx` / `.xlsm` 二进制冲突。
-
-命令入口（npm 安装后全局可用，`<repo>` 为配置表 Git 仓库路径）：
+处理任意 Git 仓库中未合并的 `.xlsx` / `.xlsm` 二进制冲突。命令入口（npm 安装后全局可用，`<repo>` 为配置表 Git 仓库路径；经 v-cli 路由为 `v-cli xlmerge …`）：
 
 ```bash
 xlmerge --repo <repo> detect
 xlmerge --repo <repo> launch
 ```
 
-`npx` 方式等价：`npx --package @kevlns/xlmerge@beta xlmerge --repo <repo> detect`。
+`npx` 等价：`npx --package @kevlns/xlmerge@beta xlmerge --repo <repo> detect`。
+
+## 何时使用
+
+用户要求处理策划表冲突、配置表冲突、xlsx/xlsm merge conflict 或多 Sheet 冲突，且 Git 仓库存在未合并的 `.xlsx`/`.xlsm` 时立即使用。这是一个**命令路由任务，不是表格分析任务**。
+
+## 使用规范（Agent 必须遵守）
+
+1. 用户确认要处理冲突后，**只做快速连贯的检测与启动**：`detect` → `count > 0` 时 `launch` → 把返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择；`count == 0` 时报告没有未解决冲突并结束。
+2. **不额外审查冲突情况**：不检查工作簿 Cell、不自行做三方 diff、不总结冲突内容、不读取 base/ours/theirs；这些复杂度由固化程序处理。
+3. **不默认走无头自动合并**：`launch --no-browser` + 程序化 decisions/apply 的无头链路仅限自动化测试或用户明确提供决策 JSON / 明确要求自动化的场景；默认流程必须走 UI `launch`，决策权始终在用户。
+4. **不替用户选择 ours/theirs**；不因为冲突文件多、Sheet 多而进入计划模式。
+5. `apply` 默认写回并 `git commit`；`--no-commit` 仅测试决策时使用；`--push` 仅用户明确要求推送时使用，正常流程不自动 push。
+6. 只处理单个文件时使用 `launch --path <仓库相对路径>`；多文件不按文件循环调用 `launch --path`，一次性同批次页面展示。
 
 ## 最高优先级快速流程
 
@@ -106,7 +114,7 @@ xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.js
 
 npm 包通过 `bin/xlmerge.js` 启动：自动检测系统 Python（≥3.9，顺序为 `XLMERGE_PYTHON` 环境变量 > `python3` > `python` > `py -3`）；若缺 `openpyxl` / `bottle` 依赖，则在 `~/.xlmerge/venv` 创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。正常流程不检查环境；仅入口明确报环境错误时诊断。
 
-## 验证 Skill 本身
+## 验证
 
 ```bash
 cd <npm 包目录>

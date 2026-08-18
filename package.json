@@ -1,16 +1,16 @@
 {
   "name": "@kevlns/xlmerge",
-  "version": "1.2.1-beta.4",
+  "version": "1.2.1-beta.5",
   "description": "Visual resolver for unresolved Git merge conflicts in .xlsx/.xlsm workbooks: three-way sheet/row/cell diff, local UI, write-back and commit.",
   "bin": {
     "xlmerge": "bin/xlmerge.js"
   },
   "files": [
     "bin/",
-    "skill/",
     "python/xlsx_merge_engine/",
     "python/xlsx_resolver/",
-    "v-cli.plugin.json"
+    "v-cli.plugin.json",
+    "AGENTS.md"
   ],
   "vCli": {
     "manifest": "v-cli.plugin.json"
@@ -42,7 +42,6 @@
     "xlsm",
     "git",
     "merge-conflict",
-    "excel",
-    "agent-skill"
+    "excel"
   ]
 }

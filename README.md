@@ -63,9 +63,9 @@ decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:
 }
 ```
 
-### 作为 Agent Skill 使用
+### Agent 调用规范
 
-`skill/SKILL.md` 为技能文档，可复制（或软链）到目标 Agent 的 skills 目录（如 `.claude/skills/xlmerge/`、`~/.pi/agent/skills/`）。Skill 要求模型只做命令路由：`detect` -> `launch` -> 等待用户在 UI 完成 Cell 选择，禁止模型自行读取或总结 diff。
+包根 `AGENTS.md` 是 AI Agent 调用规范正本，包含适用场景、快速流程、禁止事项与边界。首次通过 v-cli 调用前应运行 `v-cli agent docs xlmerge` 掌握该规范；独立安装时也可直接读取包内 `AGENTS.md`。
 
 ## 开发与测试
 
@@ -87,7 +87,7 @@ npm pack
 
 ```
 bin/xlmerge.js                  # Node 启动垫片：探测 Python、按需建 venv、透传参数
-skill/SKILL.md                  # Agent Skill 文档
+AGENTS.md                       # AI Agent 调用规范正本（场景/规范/流程/边界）
 v-cli.plugin.json               # Agent 插件清单（命令/选项/副作用），与 CLI 解析器做漂移校验
 python/
 ├── xlsx_merge_engine/          # 三方结构化差异引擎（可独立 CLI 调试）
