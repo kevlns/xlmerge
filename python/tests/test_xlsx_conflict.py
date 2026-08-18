@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -176,9 +177,9 @@ def read_macro_payload(path):
         return archive.read("xl/vbaProject.bin")
 
 
-def wait_for_process_exit(pid, timeout=5):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+def _pid_exists(pid):
+    """Cross-platform liveness probe (tasklist is Windows-only; CI runs on ubuntu)."""
+    if sys.platform == "win32":
         result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True,
@@ -186,7 +187,20 @@ def wait_for_process_exit(pid, timeout=5):
             encoding="utf-8",
             errors="replace",
         )
-        if f'"{pid}"' not in result.stdout:
+        return f'"{pid}"' in result.stdout
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but owned by another user
+    return True
+
+
+def wait_for_process_exit(pid, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_exists(pid):
             return
         time.sleep(0.1)
     raise AssertionError(f"Resolver process {pid} did not exit after shutdown")
@@ -464,6 +478,102 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
         with urllib.request.urlopen(shutdown, timeout=5) as response:
             self.assertTrue(json.load(response)["success"])
         wait_for_process_exit(result["pid"])
+
+    def test_cli_repo_defaults_to_current_directory(self):
+        # 回归：--repo 缺省必须解析为当前目录（曾误为字面逗号 ","，导致不传 --repo 时失败）
+        entry = RESOLVER_DIR / "resolve_xlsx_conflict.py"
+        completed = subprocess.run(
+            [sys.executable, str(entry), "detect"],
+            cwd=str(self.repo),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(Path(payload["repo"]), self.repo.resolve())
+        self.assertEqual(payload["count"], 1)
+
+    def _full_decisions(self, manifest):
+        """从 manifest 生成覆盖全部冲突 Cell 与 conflict_* Sheet 的决策 JSON。"""
+        decisions = {"files": {}}
+        for file_entry in manifest["files"]:
+            sheets = {}
+            for sheet in file_entry["diff"]["sheets"]:
+                entry = {"cells": {}}
+                for cell in sheet["cells"]:
+                    if cell["resolution"] == "conflict":
+                        entry["cells"][cell.get("id") or cell["coordinate"]] = "theirs"
+                if sheet["action"].startswith("conflict_"):
+                    entry["sheet"] = "theirs"
+                if entry["cells"] or "sheet" in entry:
+                    sheets[sheet["name"]] = entry
+            if sheets:
+                decisions["files"][file_entry["path"]] = {"sheets": sheets}
+        return decisions
+
+    def test_apply_works_from_non_git_cwd_via_manifest_repo_root(self):
+        # serve/apply 不要求调用方 cwd 位于 git 仓库内：仓库身份来自 manifest.repoRoot
+        runtime = Path(self.temp.name) / "runtime-apply"
+        manifest_path = prepare_conflicts(self.repo, runtime_dir=runtime)
+        decisions_path = Path(self.temp.name) / "decisions.json"
+        decisions_path.write_text(
+            json.dumps(self._full_decisions(load_manifest(manifest_path))),
+            encoding="utf-8",
+        )
+        entry = RESOLVER_DIR / "resolve_xlsx_conflict.py"
+        completed = subprocess.run(
+            [sys.executable, str(entry), "apply",
+             "--manifest", str(manifest_path), "--decisions", str(decisions_path), "--no-commit"],
+            cwd=str(Path(self.temp.name)),  # 非 git 目录
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["success"], result)
+        wb = load_workbook(self.path, data_only=False)
+        try:
+            self.assertEqual(wb["Alpha"]["B2"].value, "theirs-alpha")
+        finally:
+            wb.close()
+
+    def test_serve_works_from_non_git_cwd_and_exit_1_without_resolution(self):
+        # serve 仅依赖 manifest；未应用解析时关闭服务器会以 exit 1 退出（0 仅代表已写回）
+        runtime = Path(self.temp.name) / "runtime-serve"
+        manifest_path = prepare_conflicts(self.repo, runtime_dir=runtime)
+        entry = RESOLVER_DIR / "resolve_xlsx_conflict.py"
+        process = subprocess.Popen(
+            [sys.executable, str(entry), "serve", "--manifest", str(manifest_path), "--no-browser"],
+            cwd=str(Path(self.temp.name)),  # 非 git 目录
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+        )
+        try:
+            line = process.stdout.readline().strip()
+            self.assertTrue(line.startswith("MERGE_SERVER_URL="), line)
+            url = line.split("=", 1)[1]
+            with urllib.request.urlopen(f"{url}/api/diff", timeout=5) as response:
+                payload = json.load(response)
+            self.assertEqual(payload["summary"]["fileCount"], 1)
+            shutdown = urllib.request.Request(f"{url}/api/shutdown", data=b"", method="POST")
+            with urllib.request.urlopen(shutdown, timeout=5) as response:
+                self.assertTrue(json.load(response)["success"])
+            self.assertEqual(process.wait(timeout=10), 1)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
 
     def test_skill_declares_detect_then_launch_as_the_only_normal_route(self):
         skill_dir = PACKAGE_ROOT.parent / "skill"

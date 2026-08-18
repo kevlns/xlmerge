@@ -85,7 +85,7 @@ def _launch_background(repo: Path, manifest: Path, *, open_browser: bool) -> dic
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Resolve Git XLSX/XLSM conflicts in the sibling Debussy meta repository.")
-    parser.add_argument("--repo", default=",", help="Git repository (default: current directory).")
+    parser.add_argument("--repo", default=".", help="Git repository (default: %(default)s; the current directory).")
     parser.add_argument("--runtime-dir", help="Optional directory for extracted Git stage workbooks and manifest.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -118,7 +118,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        repo = find_repo_root(args.repo)
+        # serve/apply 仅依赖 manifest（其 repoRoot 在 apply_manifest 内部解析），
+        # 可在非 git 目录下运行；仅 detect/prepare/resolve/launch 需要前置解析仓库。
+        if args.command in ("detect", "prepare", "resolve", "launch"):
+            repo = find_repo_root(args.repo)
         if args.command == "detect":
             conflicts = detect_conflicts(repo)
             _print({"ok": True, "repo": str(repo), "count": len(conflicts), "conflicts": conflicts})
