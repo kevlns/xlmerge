@@ -12,14 +12,12 @@
 ## 安装
 
 ```bash
-# beta 阶段请显式安装预发布版本
-npm install -g @kevlns/xlmerge@beta
+# 正式版直接安装
+npm install -g @kevlns/xlmerge
 
 # 或直接从 GitHub 仓库安装开发版本
 npm install -g git+https://github.com/kevlns/xlmerge.git
 ```
-
-发布稳定版并设置 `latest` 标签后，可直接使用 `npm install -g @kevlns/xlmerge`。
 
 要求：Node.js >= 16，系统 Python >= 3.9。首次运行若缺少依赖，会在 `~/.xlmerge/venv` 自动创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。
 

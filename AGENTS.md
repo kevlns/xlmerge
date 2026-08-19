@@ -9,7 +9,7 @@ xlmerge --repo <repo> detect
 xlmerge --repo <repo> launch
 ```
 
-`npx` 等价：`npx --package @kevlns/xlmerge@beta xlmerge --repo <repo> detect`。
+`npx` 等价：`npx --package @kevlns/xlmerge@latest xlmerge --repo <repo> detect`。
 
 ## 何时使用
 
