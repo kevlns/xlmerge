@@ -1282,6 +1282,8 @@ class AutoTheirsFilterTests(unittest.TestCase):
     def test_launch_commits_auto_table_without_starting_server(self):
         self.add_filter()
         self.make_conflicts("locale/Key.xlsx")
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "cp1252"
         completed = subprocess.run(
             [
                 sys.executable,
@@ -1298,6 +1300,7 @@ class AutoTheirsFilterTests(unittest.TestCase):
             encoding="utf-8",
             errors="replace",
             timeout=60,
+            env=env,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         result = json.loads(completed.stdout)

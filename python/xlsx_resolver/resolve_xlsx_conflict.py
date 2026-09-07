@@ -30,6 +30,14 @@ SCRIPT_PATH = Path(__file__).resolve()
 PACKAGE_ROOT = SCRIPT_DIR.parent
 
 
+def _configure_stdio() -> None:
+    """Keep structured CLI output UTF-8 even under legacy Windows code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _print(data) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
@@ -146,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     args = build_parser().parse_args(argv)
     try:
         # serve/apply 仅依赖 manifest（其 repoRoot 在 apply_manifest 内部解析），
