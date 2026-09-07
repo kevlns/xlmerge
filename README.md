@@ -25,6 +25,7 @@ Git 对二进制 `.xlsx`/`.xlsm` 只会整文件冲突，无法像文本一样�
 - **保真写回** - 保留公式（注入缓存值，`data_only` 读取正确）、样式、批注、合并单元格、冻结窗格、行高列宽
 - **VBA 安全** - `.xlsm` 全程 `keep_vba`，保存后逐字节校验 VBA/ActiveX 负载
 - **Luban 表头识别** - 自动识别 `##var` / `##type` / `##group`，注释列、占位列参与对齐
+- **可配置整表过滤** - 仓库可把生成表加入过滤列表；命中时直接采用 Git stage 3 的远端原始文件
 - **默认不越权** - 服务只监听 `127.0.0.1`，不自动 push
 
 ## Getting started
@@ -46,6 +47,9 @@ npm install -g git+https://github.com/kevlns/xlmerge.git
 # 检测未合并的 .xlsx/.xlsm（输出 JSON）
 xlmerge --repo <仓库路径> detect
 
+# 可选：把无需逐 Cell 审查的生成表加入仓库过滤列表
+xlmerge --repo <仓库路径> filter add locale/Key.xlsx
+
 # 提取三方版本并后台启动可视化解析器，返回 url（自动打开浏览器）
 xlmerge --repo <仓库路径> launch
 ```
@@ -63,6 +67,9 @@ xlmerge --repo <仓库路径> launch
 # 检测未合并的 .xlsx/.xlsm（输出 JSON）
 xlmerge --repo <仓库路径> detect
 
+# 添加整表过滤项（写入仓库根目录 .xlmerge.json）
+xlmerge --repo <仓库路径> filter add <相对路径或路径后缀.xlsx>
+
 # 提取三方版本并后台启动可视化解析器，返回 url（自动打开浏览器）
 xlmerge --repo <仓库路径> launch
 
@@ -75,6 +82,18 @@ xlmerge --repo <仓库路径> apply --manifest <manifest.json> --decisions <deci
 ```
 
 `--repo` 缺省为当前目录（向上查找 Git 根）。
+
+过滤列表默认为空，保存在仓库根目录的 `.xlmerge.json`：
+
+```json
+{
+  "autoTheirs": [
+    "locale/Key.xlsx"
+  ]
+}
+```
+
+过滤项按路径段做不区分大小写的后缀匹配。命中的冲突工作簿不做 Cell 分析，而是逐字节采用 Git stage 3（theirs）并随同本批次提交；如果整批冲突都命中过滤项，`launch`/`resolve` 会直接写回并提交，不启动空白 UI。命令可重复执行，已有项不会重复写入。
 
 decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:4|name`）：
 
@@ -97,7 +116,7 @@ decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:
 ## Development
 
 ```bash
-# 单元测试（72 个，覆盖引擎与解析器全流程）
+# 单元测试（覆盖引擎、解析器、过滤配置与大请求体全流程）
 python -m unittest discover -s python/tests -v
 
 # 校验 v-cli.plugin.json 与 CLI 解析器未漂移（命令/选项/副作用覆盖）
@@ -131,9 +150,9 @@ kevlns 工具家族共享同一套发布约定（tag 驱动、CI 护栏、MIT）
 
 | Package | Purpose | Status |
 | --- | --- | --- |
-| [`v-cli`](https://github.com/kevlns/v-cli) | 个人工具箱 CLI | v0.2.1 |
-| [`xlmerge`](https://github.com/kevlns/xlmerge) | Git 中 .xlsx/.xlsm 冲突可视化解决工具（本仓库） | v1.2.2 |
-| [`u-cli-mod`](https://github.com/kevlns/u-cli-mod) | Unity 精确版本路由 + CLI + pipeline 包（Windows-first） | v0.1.1 |
+| [`v-cli`](https://github.com/kevlns/v-cli) | 个人工具箱 CLI | v0.2.3 |
+| [`xlmerge`](https://github.com/kevlns/xlmerge) | Git 中 .xlsx/.xlsm 冲突可视化解决工具（本仓库） | v1.3.0 |
+| [`u-cli-mod`](https://github.com/kevlns/u-cli-mod) | Unity 精确版本路由 + CLI + pipeline 包（Windows-first） | v0.1.4 |
 
 ## Compatibility
 

@@ -460,11 +460,16 @@ function enableHorizontalWheel(host) {
   }, {passive: false});
 }
 
+function autoTheirsNote(sep) {
+  const count = (model && model.summary) ? (model.summary.autoTheirsCount || 0) : 0;
+  return count ? `${sep}已按远端全量自动处理 ${count} 张表` : '';
+}
+
 async function init() {
   const response = await fetch('/api/diff');
   model = await response.json();
   if (!model.files || model.files.length === 0) {
-    byId('footerStatus').textContent = '未发现冲突。';
+    byId('footerStatus').textContent = '未发现冲突。' + autoTheirsNote('');
     return;
   }
   initializeDecisions();
@@ -1123,7 +1128,7 @@ function updateStats() {
   }
   byId('localCount').textContent = String(local); byId('totalCount').textContent = String(total);
   const file = currentFileData(); const sheet = currentSheetData();
-  byId('footerStatus').textContent = `共 ${total} 个可决策项，${local} 项采用本地 · 当前：${file.path}${sheet ? ` / ${sheet.name}` : ''}`;
+  byId('footerStatus').textContent = `共 ${total} 个可决策项，${local} 项采用本地 · 当前：${file.path}${sheet ? ` / ${sheet.name}` : ''}${autoTheirsNote(' · ')}`;
 }
 
 function renderCommitSteps(steps) {

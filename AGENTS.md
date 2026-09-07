@@ -6,6 +6,7 @@
 
 ```bash
 xlmerge --repo <repo> detect
+xlmerge --repo <repo> filter add <path.xlsx>
 xlmerge --repo <repo> launch
 ```
 
@@ -17,7 +18,7 @@ xlmerge --repo <repo> launch
 
 ## 使用规范（Agent 必须遵守）
 
-1. 用户确认要处理冲突后，**只做快速连贯的检测与启动**：`detect` → `count > 0` 时 `launch` → 把返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择；`count == 0` 时报告没有未解决冲突并结束。
+1. 用户确认要处理冲突后，**只做快速连贯的检测与启动**：`detect` → `count > 0` 时 `launch`。`reviewCount > 0` 时把返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择；`reviewCount == 0` 时 `launch` 会直接采用过滤项的远端版本并提交，报告其 JSON 结果；`count == 0` 时报告没有未解决冲突并结束。
 2. **不额外审查冲突情况**：不检查工作簿 Cell、不自行做三方 diff、不总结冲突内容、不读取 base/ours/theirs；这些复杂度由固化程序处理。
 3. **不默认走无头自动合并**：`launch --no-browser` + 程序化 decisions/apply 的无头链路仅限自动化测试或用户明确提供决策 JSON / 明确要求自动化的场景；默认流程必须走 UI `launch`，决策权始终在用户。
 4. **不替用户选择 ours/theirs**；不因为冲突文件多、Sheet 多而进入计划模式。
@@ -34,15 +35,27 @@ xlmerge --repo <repo> launch
 xlmerge --repo <repo> detect
 ```
 
-2. `count > 0` 时立即启动解析器；不传 `--path`，一次性把所有冲突工作簿放进同一页面：
+2. `count > 0` 时立即启动解析器；不传 `--path`，一次性处理所有冲突工作簿：
 
 ```bash
 xlmerge --repo <repo> launch
 ```
 
-3. 把 `launch` 返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择。`launch` 已经负责提取全部 Git 三方版本、计算多文件多 Sheet diff、后台启动服务并打开浏览器。
+3. `reviewCount > 0` 时，把 `launch` 返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择。`launch` 已经负责提取全部 Git 三方版本、计算多文件多 Sheet diff、后台启动服务并打开浏览器。`reviewCount == 0` 时不会启动 UI，命令会写回所有过滤项、提交并返回 `autoResolved`。
 
 如果 `count` 为 `0`，报告没有未解决的 `.xlsx` / `.xlsm` 冲突并结束。
+
+## 仓库过滤列表
+
+过滤列表默认为空，仅在用户明确要求某类生成表始终采用远端整表时添加：
+
+```bash
+xlmerge --repo <repo> filter add locale/Key.xlsx
+```
+
+命令把规范化后的相对 `.xlsx`/`.xlsm` 路径后缀写入仓库根目录 `.xlmerge.json` 的 `autoTheirs` 数组；匹配不区分大小写，重复添加是幂等操作。工具不内置任何业务路径。
+
+命中过滤项的冲突文件不进入结构化分析或 UI，而是逐字节写入 Git index stage 3（theirs）。若 stage 3 不存在则安全失败；混合批次会在用户确认人工冲突后，与 UI 处理结果一起写回并提交。
 
 ### 快速流程禁止事项
 
@@ -77,7 +90,7 @@ xlmerge --repo <repo> launch
    - 先请求只读 `/api/commit-preview` 生成 commit 信息，弹出居中的二次确认窗口；确认后才执行写回与 `git add` / `git commit`。
    - 以 `ours` 工作簿为基底重建受影响 Sheet；保留所选来源的值、公式、样式、批注、超链接、数字格式、行高列宽、冻结拆分等视图状态；公式保留并从源文件注入缓存值。
    - 保存到仓库原路径并重新打开验证可读；`.xlsm` 全程 `keep_vba` 模式，保存后逐字节校验 VBA 负载。
-   - 存在冲突 Cell 选择时自动生成结构化提交信息（每个冲突 Cell 一行，含表、Sheet、单元格、选择、双方值），`--message` 可覆盖。
+   - 存在冲突 Cell 选择时自动生成结构化提交信息（每个冲突 Cell 一行，含表、Sheet、单元格、选择、双方值）；过滤项以“远端全量”记录，`--message` 可覆盖。
    - 可视化入口不自动 push。
 
 4. 用户完成页面操作并返回后复核：
@@ -105,6 +118,7 @@ xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.js
 
 - 只处理 Git 未合并状态中的 `.xlsx` / `.xlsm`；不处理普通修改。
 - 文件级 delete/modify 冲突缺少完整双方工作簿时，解析器停止并报告；不要猜测删除还是保留。
+- 过滤项要求 Git stage 3 存在；缺少远端版本时停止并报告，不退回本地版本。
 - 写回前必须收齐所有人工选择；缺少任何选择时不改工作树。
 - Excel 正在占用目标文件导致替换失败时，要求用户关闭该工作簿后重试。
 - 不直接修改 XLSX 内部 XML，不把公式替换为缓存值。

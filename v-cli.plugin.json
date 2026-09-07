@@ -21,7 +21,7 @@
     }
   ],
   "agent": {
-    "whenToUse": "When a user asks to resolve Git merge conflicts in .xlsx/.xlsm planning or configuration tables (策划表/配置表冲突): run detect first; when count > 0 run launch and give the returned url to the user. Do not inspect workbook cells or summarize diffs yourself; the resolver owns diff, choices, write-back and commit.",
+    "whenToUse": "When a user asks to resolve Git merge conflicts in .xlsx/.xlsm planning or configuration tables (策划表/配置表冲突): run detect first; when reviewCount > 0 run launch and give the returned url to the user. Configured auto-theirs filters may resolve and commit matched generated workbooks without opening the UI. Do not inspect workbook cells or summarize diffs yourself; the resolver owns diff, choices, write-back and commit.",
     "globalOptions": [
       {
         "flags": "--repo <path>",
@@ -41,7 +41,7 @@
         "options": [],
         "output": {
           "format": "json",
-          "description": "Object with ok, repo (absolute path), count and conflicts (array of {path, stages})."
+          "description": "Object with ok, repo, count, reviewCount, autoTheirs and conflicts (array of {path, stages})."
         },
         "exitCodes": {
           "0": "success",
@@ -51,9 +51,32 @@
         "safety": ["read-only", "no-worktree-modification"]
       },
       {
+        "path": ["filter", "add"],
+        "usage": "xlmerge --repo <repo> filter add <path>",
+        "description": "Add a repository-scoped case-insensitive workbook path-suffix filter whose conflicts are adopted byte-for-byte from Git stage 3.",
+        "arguments": [
+          {
+            "name": "path",
+            "required": true,
+            "description": "Relative .xlsx/.xlsm path suffix to adopt from Git stage 3."
+          }
+        ],
+        "options": [],
+        "output": {
+          "format": "json",
+          "description": "Object with ok, repo, config, filter, added and the complete filters list. Writes <repo>/.xlmerge.json."
+        },
+        "exitCodes": {
+          "0": "success (including an already-present filter)",
+          "1": "invalid repository, filter path or .xlmerge.json",
+          "2": "usage error"
+        },
+        "safety": ["writes-worktree", "no-commit"]
+      },
+      {
         "path": ["prepare"],
         "usage": "xlmerge --repo <repo> prepare [--path <file>]",
-        "description": "Extract base/ours/theirs stage versions from the Git index and build a sheet-aware manifest.",
+        "description": "Build a sheet-aware manifest; configured auto-theirs matches skip extraction and cell analysis.",
         "arguments": [],
         "options": [
           {
@@ -89,14 +112,14 @@
         ],
         "output": {
           "format": "stdout",
-          "description": "Prints MERGE_SERVER_URL=http://127.0.0.1:<port> then serves the UI on loopback until a resolution is applied (write-back + commit) and the server shuts down."
+          "description": "Prints MERGE_SERVER_URL=http://127.0.0.1:<port> for review conflicts; an all-filtered batch instead returns JSON after stage-3 write-back and commit."
         },
         "exitCodes": {
-          "0": "success (resolution applied; server shut down after write-back)",
+          "0": "success (resolution applied automatically or via UI; server shuts down after UI write-back)",
           "1": "error (prepare failure or server stopped before a resolution was applied)",
           "2": "usage error"
         },
-        "safety": ["blocking", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree-via-ui", "commits-by-default-via-ui"]
+        "safety": ["blocking", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree", "commits-by-default", "writes-worktree-via-ui", "commits-by-default-via-ui"]
       },
       {
         "path": ["launch"],
@@ -115,14 +138,14 @@
         ],
         "output": {
           "format": "json",
-          "description": "Object with ok, pid, url (http://127.0.0.1:<port>), manifest and stdout/stderr log file paths."
+          "description": "For review conflicts: object with ok, pid, url, manifest and log paths. For an all-filtered batch: url is null and autoResolved/steps report automatic stage-3 write-back and commit."
         },
         "exitCodes": {
           "0": "success",
           "1": "error (prepare failure or server did not report a URL within 15 seconds)",
           "2": "usage error"
         },
-        "safety": ["starts-background-server", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree-via-ui", "commits-by-default-via-ui"]
+        "safety": ["starts-background-server", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree", "commits-by-default", "writes-worktree-via-ui", "commits-by-default-via-ui"]
       },
       {
         "path": ["apply"],

@@ -23,8 +23,7 @@ sys.path.insert(0, str(RESOLVER_DIR))
 
 from resolve_xlsx_conflict import build_parser
 
-PUBLIC_COMMANDS = ["detect", "prepare", "resolve", "launch", "apply"]
-HIDDEN_COMMANDS = {"serve"}  # internal subcommand spawned by launch (help=SUPPRESS)
+PUBLIC_COMMAND_PATHS = [("detect",), ("filter", "add"), ("prepare",), ("resolve",), ("launch",), ("apply",)]
 
 TOP_LEVEL_KEYS = ["schemaVersion", "package", "command", "bin", "description", "platforms", "runtime", "environment", "agent"]
 AGENT_KEYS = ["whenToUse", "globalOptions", "commands"]
@@ -50,16 +49,21 @@ SAFETY_TOKENS = {
 }
 
 
-def public_subparsers(parser):
-    """Return {name: subparser} for every non-hidden subcommand."""
+def public_command_parsers(parser, prefix=()):
+    """Return {command path tuple: leaf parser} for every non-hidden command."""
     result = {}
     for action in parser._actions:
         if not isinstance(action, argparse._SubParsersAction):
             continue
         hidden = {item.dest for item in action._choices_actions if item.help == argparse.SUPPRESS}
         for name, subparser in action.choices.items():
-            if name not in hidden and name not in ("help", "?"):
-                result[name] = subparser
+            if name in hidden or name in ("help", "?"):
+                continue
+            nested = public_command_parsers(subparser, prefix + (name,))
+            if nested:
+                result.update(nested)
+            else:
+                result[prefix + (name,)] = subparser
     return result
 
 
@@ -141,12 +145,12 @@ class VCliPluginManifestTests(unittest.TestCase):
         self.assertEqual(manifest_flag_keys(agent["globalOptions"]), {("--repo",), ("--runtime-dir",)})
 
         commands = agent["commands"]
-        self.assertEqual([tuple(command["path"]) for command in commands], [(name,) for name in PUBLIC_COMMANDS])
+        self.assertEqual([tuple(command["path"]) for command in commands], PUBLIC_COMMAND_PATHS)
         usages = [command["usage"] for command in commands]
         self.assertEqual(len(usages), len(set(usages)))
         for command in commands:
             self.assertEqual(list(command.keys()), COMMAND_KEYS)
-            self.assertEqual(command["arguments"], [])
+            self.assertIsInstance(command["arguments"], list)
             self.assertTrue(command["usage"].startswith("xlmerge "))
             self.assertTrue(command["description"])
             self.assertEqual([sorted(option.keys()) for option in command["options"]], [["description", "flags"]] * len(command["options"]))
@@ -162,22 +166,27 @@ class VCliPluginManifestTests(unittest.TestCase):
 
     def test_manifest_covers_every_public_command_and_option(self):
         parser = build_parser()
-        public = public_subparsers(parser)
-        self.assertEqual(set(public), set(PUBLIC_COMMANDS))
+        public = public_command_parsers(parser)
+        self.assertEqual(set(public), set(PUBLIC_COMMAND_PATHS))
         # serve must stay hidden; if it becomes public the manifest must cover it
         for action in parser._actions:
             if isinstance(action, argparse._SubParsersAction):
                 hidden = {item.dest: item.help for item in action._choices_actions}
                 self.assertEqual(hidden.get("serve"), argparse.SUPPRESS)
 
-        manifest_commands = {tuple(command["path"])[0]: command for command in self.manifest["agent"]["commands"]}
+        manifest_commands = {tuple(command["path"]): command for command in self.manifest["agent"]["commands"]}
         self.assertEqual(set(manifest_commands), set(public))
-        for name, subparser in public.items():
+        for path, subparser in public.items():
             self.assertEqual(
-                manifest_flag_keys(manifest_commands[name]["options"]),
+                manifest_flag_keys(manifest_commands[path]["options"]),
                 parser_option_keys(subparser),
-                f"option drift for command '{name}'",
+                f"option drift for command '{' '.join(path)}'",
             )
+        self.assertEqual(manifest_commands[("filter", "add")]["arguments"], [{
+            "name": "path",
+            "required": True,
+            "description": "Relative .xlsx/.xlsm path suffix to adopt from Git stage 3.",
+        }])
 
         # global option drift check
         global_keys = set()
@@ -191,29 +200,31 @@ class VCliPluginManifestTests(unittest.TestCase):
         )
 
     def test_side_effect_markers_are_accurate(self):
-        commands = {tuple(command["path"])[0]: command for command in self.manifest["agent"]["commands"]}
+        commands = {tuple(command["path"]): command for command in self.manifest["agent"]["commands"]}
 
-        def safety(name):
-            return set(commands[name]["safety"])
+        def safety(*path):
+            return set(commands[path]["safety"])
 
         self.assertLessEqual({"read-only", "no-worktree-modification"}, safety("detect"))
         self.assertFalse(safety("detect") & {"writes-worktree", "writes-runtime-dir", "commits-by-default", "writes-worktree-via-ui", "commits-by-default-via-ui"})
         self.assertLessEqual({"writes-runtime-dir", "no-worktree-modification", "no-commit"}, safety("prepare"))
+        self.assertLessEqual({"writes-worktree", "no-commit"}, safety("filter", "add"))
         self.assertLessEqual({"blocking", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree-via-ui", "commits-by-default-via-ui"}, safety("resolve"))
         self.assertLessEqual({"starts-background-server", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree-via-ui", "commits-by-default-via-ui"}, safety("launch"))
         self.assertLessEqual({"writes-worktree", "commits-by-default", "pushes-only-with-flag"}, safety("apply"))
         self.assertFalse(safety("apply") & {"read-only", "no-commit", "no-push", "writes-runtime-dir"})
 
         # output formats match the CLI contract
-        self.assertEqual(commands["detect"]["output"]["format"], "json")
-        self.assertEqual(commands["prepare"]["output"]["format"], "json")
-        self.assertEqual(commands["launch"]["output"]["format"], "json")
-        self.assertEqual(commands["apply"]["output"]["format"], "json")
-        self.assertEqual(commands["resolve"]["output"]["format"], "stdout")
-        self.assertIn("MERGE_SERVER_URL", commands["resolve"]["output"]["description"])
+        self.assertEqual(commands[("detect",)]["output"]["format"], "json")
+        self.assertEqual(commands[("filter", "add")]["output"]["format"], "json")
+        self.assertEqual(commands[("prepare",)]["output"]["format"], "json")
+        self.assertEqual(commands[("launch",)]["output"]["format"], "json")
+        self.assertEqual(commands[("apply",)]["output"]["format"], "json")
+        self.assertEqual(commands[("resolve",)]["output"]["format"], "stdout")
+        self.assertIn("MERGE_SERVER_URL", commands[("resolve",)]["output"]["description"])
         # resolve exit 0 means a resolution was applied, not merely a clean stop
-        self.assertIn("resolution applied", commands["resolve"]["exitCodes"]["0"])
-        self.assertIn("before a resolution was applied", commands["resolve"]["exitCodes"]["1"])
+        self.assertIn("resolution applied", commands[("resolve",)]["exitCodes"]["0"])
+        self.assertIn("before a resolution was applied", commands[("resolve",)]["exitCodes"]["1"])
 
     def test_shim_python_dependencies_match_manifest_runtime(self):
         # bin/xlmerge.js 固定依赖必须与 manifest runtime.pythonDependencies 逐项一致

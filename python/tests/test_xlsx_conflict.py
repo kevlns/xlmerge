@@ -20,12 +20,16 @@ sys.path.insert(0, str(RESOLVER_DIR))
 
 from xlsx_conflict import (
     ConflictError,
+    _git_blob,
     _build_merged_file,
     _close_workbook,
+    add_auto_theirs_filter,
     apply_manifest,
+    auto_theirs_path,
     detect_conflicts,
     diff_workbooks,
     load_manifest,
+    load_auto_theirs_filters,
     prepare_conflicts,
 )
 
@@ -336,6 +340,7 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
 
             # 只读预览：返回结构化 commit 信息，不写盘、不提交
             preview_body = json.dumps({
+                "padding": "x" * 150_000,
                 "decisions": {
                     "files": {
                         "new_meta/MultiSheet.xlsx": {
@@ -1153,6 +1158,153 @@ class StructuralMergeTests(unittest.TestCase):
         )
         self.assertEqual(sheet["changedCount"], sheet["decisionCellCount"])
         self.assertLess(sheet["changedCount"], sheet["rawChangedCellCount"])
+
+
+class AutoTheirsFilterTests(unittest.TestCase):
+    """Repository filters bypass analysis and adopt matching workbooks from Git stage 3."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp.name) / "meta"
+        self.repo.mkdir()
+        git(self.repo, "init")
+        git(self.repo, "config", "user.name", "Auto Test")
+        git(self.repo, "config", "user.email", "auto@example.invalid")
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def runtime(self):
+        return Path(self.temp.name) / "runtime"
+
+    def add_filter(self, pattern="locale/Key.xlsx"):
+        return add_auto_theirs_filter(self.repo, pattern)
+
+    def make_conflicts(self, *relative_paths):
+        for relative in relative_paths:
+            target = self.repo / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_grid(target, [["base"]])
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "base")
+        git(self.repo, "checkout", "-b", "theirs")
+        for relative in relative_paths:
+            write_grid(self.repo / relative, [["theirs"]])
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "theirs")
+        git(self.repo, "checkout", "-")
+        for relative in relative_paths:
+            write_grid(self.repo / relative, [["ours"]])
+        git(self.repo, "add", ".")
+        git(self.repo, "commit", "-m", "ours")
+        self.assertNotEqual(git(self.repo, "merge", "theirs", check=False).returncode, 0)
+
+    def test_auto_rule_matches_locale_key_case_insensitively(self):
+        self.assertEqual(load_auto_theirs_filters(self.repo), [])
+        result = self.add_filter()
+        self.assertTrue(result["added"])
+        self.assertEqual(load_auto_theirs_filters(self.repo), ["locale/Key.xlsx"])
+        duplicate = self.add_filter("LOCALE\\KEY.XLSX")
+        self.assertFalse(duplicate["added"])
+        filters = load_auto_theirs_filters(self.repo)
+        self.assertIsNotNone(auto_theirs_path("locale/Key.xlsx", filters))
+        self.assertIsNotNone(auto_theirs_path("LOCALE/KEY.XLSX", filters))
+        self.assertIsNotNone(auto_theirs_path("sub/locale/Key.xlsx", filters))
+        self.assertIsNone(auto_theirs_path("Key.xlsx", filters))
+        self.assertIsNone(auto_theirs_path("locale/GameText.xlsx", filters))
+
+    def test_filter_add_cli_persists_repository_config(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(RESOLVER_DIR / "resolve_xlsx_conflict.py"),
+                "--repo",
+                str(self.repo),
+                "filter",
+                "add",
+                "generated/Locale.xlsm",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["added"])
+        self.assertEqual(result["filters"], ["generated/Locale.xlsm"])
+        self.assertEqual(load_auto_theirs_filters(self.repo), ["generated/Locale.xlsm"])
+
+    def test_prepare_excludes_auto_table_from_review(self):
+        self.add_filter()
+        self.make_conflicts("locale/Key.xlsx")
+        manifest = load_manifest(prepare_conflicts(self.repo, runtime_dir=self.runtime()))
+        self.assertEqual(manifest["files"], [])
+        self.assertEqual([item["path"] for item in manifest["autoTheirs"]], ["locale/Key.xlsx"])
+        self.assertEqual(manifest["summary"]["fileCount"], 0)
+        self.assertEqual(manifest["summary"]["autoTheirsCount"], 1)
+
+    def test_apply_adopts_theirs_and_commits_without_decisions(self):
+        self.add_filter()
+        self.make_conflicts("locale/Key.xlsx")
+        theirs = _git_blob(self.repo, 3, "locale/Key.xlsx")
+        self.assertIsNotNone(theirs)
+        manifest_path = prepare_conflicts(self.repo, runtime_dir=self.runtime())
+        result = apply_manifest(manifest_path, {"files": {}})
+        self.assertTrue(result["success"], result["steps"])
+        self.assertEqual(result["autoTheirs"], ["locale/Key.xlsx"])
+        self.assertEqual((self.repo / "locale" / "Key.xlsx").read_bytes(), theirs)
+        self.assertEqual(detect_conflicts(self.repo), [])
+        message = git(self.repo, "log", "-1", "--pretty=%B").stdout
+        self.assertIn("resolve(auto): [表:locale/Key.xlsx]-[选择:远端全量]", message)
+
+    def test_mixed_batch_keeps_only_manual_table_for_review(self):
+        self.add_filter()
+        self.make_conflicts("locale/Key.xlsx", "Other.xlsx")
+        theirs = _git_blob(self.repo, 3, "locale/Key.xlsx")
+        manifest_path = prepare_conflicts(self.repo, runtime_dir=self.runtime())
+        manifest = load_manifest(manifest_path)
+        self.assertEqual([item["path"] for item in manifest["files"]], ["Other.xlsx"])
+        self.assertEqual([item["path"] for item in manifest["autoTheirs"]], ["locale/Key.xlsx"])
+
+        decisions = {"files": {"Other.xlsx": {"sheets": {"Data": {"cells": {"A1": "ours"}}}}}}
+        result = apply_manifest(manifest_path, decisions)
+        self.assertTrue(result["success"], result["steps"])
+        self.assertEqual(result["autoTheirs"], ["locale/Key.xlsx"])
+        self.assertEqual((self.repo / "locale" / "Key.xlsx").read_bytes(), theirs)
+        workbook = load_workbook(self.repo / "Other.xlsx")
+        try:
+            self.assertEqual(workbook["Data"]["A1"].value, "ours")
+        finally:
+            workbook.close()
+
+    def test_launch_commits_auto_table_without_starting_server(self):
+        self.add_filter()
+        self.make_conflicts("locale/Key.xlsx")
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(RESOLVER_DIR / "resolve_xlsx_conflict.py"),
+                "--repo",
+                str(self.repo),
+                "--runtime-dir",
+                str(self.runtime()),
+                "launch",
+                "--no-browser",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertTrue(result["ok"], result)
+        self.assertIsNone(result["url"])
+        self.assertEqual(result["autoResolved"], ["locale/Key.xlsx"])
+        self.assertEqual(detect_conflicts(self.repo), [])
 
 
 if __name__ == "__main__":

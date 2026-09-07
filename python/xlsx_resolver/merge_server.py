@@ -18,6 +18,17 @@ if str(SCRIPT_DIR) not in sys.path:
 from xlsx_conflict import ConflictError, _build_commit_message, apply_manifest, load_manifest
 
 
+def _payload() -> dict:
+    """Read raw JSON without Bottle's 100 KiB ``request.json`` form-memory limit."""
+    if not request.content_length:
+        return {}
+    data = request.body.read()
+    if not data:
+        return {}
+    parsed = json.loads(data.decode("utf-8"))
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _json(data, status: int = 200):
     response.status = status
     response.content_type = "application/json; charset=utf-8"
@@ -43,9 +54,15 @@ def _public_manifest(manifest):
     }
 
 
-def serve(manifest_path: Path | str, *, open_browser: bool = True) -> bool:
+def serve(manifest_path: Path | str, *, open_browser: bool = True, port: int = 0) -> bool:
     manifest_path = Path(manifest_path).resolve()
     manifest = load_manifest(manifest_path)
+    if not manifest["files"]:
+        print(
+            "Manifest has no conflicts requiring review; use resolve/apply for auto-theirs entries.",
+            file=sys.stderr,
+        )
+        return False
     html_path = Path(__file__).with_name("merge_ui.html")
     app = Bottle()
     state = {"resolved": False, "server": None}
@@ -62,7 +79,7 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True) -> bool:
     @app.post("/api/commit-preview")
     def commit_preview():
         """只读：按当前 decisions 生成结构化 commit 信息，不执行任何写操作。"""
-        payload = request.json or {}
+        payload = _payload()
         try:
             message = _build_commit_message(manifest, payload.get("decisions") or {})
             return _json({"message": message})
@@ -71,7 +88,7 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True) -> bool:
 
     @app.post("/api/resolve")
     def resolve():
-        payload = request.json or {}
+        payload = _payload()
         try:
             result = apply_manifest(
                 manifest_path,
@@ -87,12 +104,16 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True) -> bool:
         except (ConflictError, OSError, ValueError, KeyError) as exc:
             return _json({"success": False, "error": str(exc)}, 400)
 
+    @app.error(413)
+    def too_large(error):
+        return _json({"success": False, "error": "request body too large"}, 413)
+
     @app.post("/api/shutdown")
     def shutdown():
         threading.Thread(target=state["server"].shutdown, daemon=True).start()
         return _json({"success": True})
 
-    server = make_server("127.0.0.1", 0, app)
+    server = make_server("127.0.0.1", port, app)
     state["server"] = server
     url = f"http://127.0.0.1:{server.server_port}"
     print(f"MERGE_SERVER_URL={url}", flush=True)

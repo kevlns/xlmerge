@@ -43,6 +43,88 @@ def _is_macro_workbook(path: str | Path) -> bool:
     return Path(path).suffix.lower() == ".xlsm"
 
 
+CONFIG_FILENAME = ".xlmerge.json"
+
+
+def _normalize_filter_path(pattern: str) -> str:
+    normalized = pattern.replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    parts = normalized.split("/")
+    if (
+        not normalized
+        or Path(normalized).is_absolute()
+        or any(part in ("", ".", "..") for part in parts)
+        or not _is_supported_workbook(normalized)
+    ):
+        raise ConflictError("Filter must be a relative .xlsx/.xlsm path without empty, '.' or '..' segments.")
+    return normalized
+
+
+def load_auto_theirs_filters(repo: Path | str) -> list[str]:
+    """Load repository-scoped auto-theirs suffix filters; missing config means no filters."""
+    repo_root = find_repo_root(repo)
+    config_path = repo_root / CONFIG_FILENAME
+    if not config_path.exists():
+        return []
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConflictError(f"Invalid {CONFIG_FILENAME}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("autoTheirs", []), list):
+        raise ConflictError(f"Invalid {CONFIG_FILENAME}: 'autoTheirs' must be an array.")
+    filters: list[str] = []
+    for value in data.get("autoTheirs", []):
+        if not isinstance(value, str):
+            raise ConflictError(f"Invalid {CONFIG_FILENAME}: every autoTheirs entry must be a string.")
+        filters.append(_normalize_filter_path(value))
+    return filters
+
+
+def add_auto_theirs_filter(repo: Path | str, pattern: str) -> dict[str, Any]:
+    """Persist one repository-scoped auto-theirs suffix filter atomically."""
+    repo_root = find_repo_root(repo)
+    normalized = _normalize_filter_path(pattern)
+    config_path = repo_root / CONFIG_FILENAME
+    data: dict[str, Any] = {}
+    if config_path.exists():
+        try:
+            loaded = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConflictError(f"Invalid {CONFIG_FILENAME}: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise ConflictError(f"Invalid {CONFIG_FILENAME}: root must be an object.")
+        data = loaded
+    filters = load_auto_theirs_filters(repo_root)
+    existing = {value.lower() for value in filters}
+    added = normalized.lower() not in existing
+    if added:
+        filters.append(normalized)
+    data["autoTheirs"] = filters
+    temp_path = config_path.with_name(f".{config_path.name}.{os.getpid()}.tmp")
+    try:
+        temp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(temp_path, config_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return {
+        "config": str(config_path),
+        "filter": normalized,
+        "added": added,
+        "filters": filters,
+    }
+
+
+def auto_theirs_path(relative_path: str, filters: Iterable[str]) -> str | None:
+    """Return the canonical filter for a case-insensitive path-suffix match."""
+    parts = relative_path.replace("\\", "/").lower().split("/")
+    for pattern in filters:
+        expected = pattern.lower().split("/")
+        if len(parts) >= len(expected) and parts[-len(expected):] == expected:
+            return pattern
+    return None
+
+
 def _is_macro_payload_entry(name: str) -> bool:
     lowered = name.lower()
     return (
@@ -831,9 +913,22 @@ def prepare_conflicts(
         raise ConflictError("No unresolved .xlsx/.xlsm conflicts were found.")
 
     target_dir = _safe_runtime_dir(repo_root, runtime_dir)
+    auto_filters = load_auto_theirs_filters(repo_root)
     prepared_files = []
+    auto_entries: list[dict[str, Any]] = []
     for item in conflicts:
         path = item["path"]
+        if auto_theirs_path(path, auto_filters):
+            if 3 not in item["stages"]:
+                raise ConflictError(
+                    f"{path} matches the auto-theirs rule, but Git stage 3 is missing."
+                )
+            auto_entries.append({
+                "path": path,
+                "theirsAuthor": _theirs_author(repo_root, path),
+                "theirsDate": _theirs_date(repo_root, path),
+            })
+            continue
         ours_blob = _git_blob(repo_root, 2, path)
         theirs_blob = _git_blob(repo_root, 3, path)
         if ours_blob is None or theirs_blob is None:
@@ -881,11 +976,13 @@ def prepare_conflicts(
         "version": 3,
         "repoRoot": str(repo_root),
         "files": prepared_files,
+        "autoTheirs": auto_entries,
         "summary": {
             "fileCount": len(prepared_files),
             "cellConflictCount": sum(f["diff"]["summary"]["cellConflictCount"] for f in prepared_files),
             "sheetConflictCount": sum(f["diff"]["summary"]["sheetConflictCount"] for f in prepared_files),
             "structuralConflictCount": sum(f["diff"]["summary"].get("structuralConflictCount", 0) for f in prepared_files),
+            "autoTheirsCount": len(auto_entries),
         },
     }
     manifest_path = target_dir / "manifest.json"
@@ -1389,6 +1486,24 @@ def _git_step(repo: Path, args: list[str], label: str) -> dict[str, Any]:
     return {"step": label, "success": result.returncode == 0, "output": output}
 
 
+def _apply_auto_theirs(repo: Path, entries: list[dict[str, Any]]) -> list[Path]:
+    """Write auto-theirs workbooks byte-for-byte from Git index stage 3."""
+    outputs: list[Path] = []
+    for entry in entries:
+        relative_path = entry["path"]
+        output = (repo / Path(relative_path)).resolve()
+        if os.path.commonpath([str(repo), str(output)]) != str(repo):
+            raise ConflictError(f"Output escapes repository: {output}")
+        blob = _git_blob(repo, 3, relative_path)
+        if blob is None:
+            raise ConflictError(f"{relative_path} matches the auto-theirs rule, but Git stage 3 is missing.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with open(output, "wb") as handle:
+            handle.write(blob)
+        outputs.append(output)
+    return outputs
+
+
 def _build_commit_message(manifest: dict[str, Any], decisions: dict[str, Any]) -> str:
     """生成结构化提交信息：每个已选择的冲突 Cell 一行。
 
@@ -1396,6 +1511,8 @@ def _build_commit_message(manifest: dict[str, Any], decisions: dict[str, Any]) -
     无冲突 Cell 时回退默认信息。
     """
     lines: list[str] = []
+    for entry in manifest.get("autoTheirs") or []:
+        lines.append(f"resolve(auto): [表:{entry['path']}]-[选择:远端全量]")
     for file_entry in manifest["files"]:
         file_choice = _file_decisions(decisions, file_entry["id"])
         sheet_choices = file_choice.get("sheets") or {}
@@ -1448,6 +1565,9 @@ def apply_manifest(
     manifest = load_manifest(manifest_path)
     _validate_decisions(manifest, decisions)
     repo = find_repo_root(manifest["repoRoot"])
+    auto_entries = manifest.get("autoTheirs") or []
+    if not manifest["files"] and not auto_entries:
+        raise ConflictError("Manifest has no conflicts to resolve.")
     prepared: list[tuple[Path, Path]] = []
     try:
         for file_entry in manifest["files"]:
@@ -1457,8 +1577,10 @@ def apply_manifest(
             prepared.append((output, _build_merged_file(file_entry, decisions)))
         for output, temp_path in prepared:
             os.replace(temp_path, output)
+        auto_outputs = _apply_auto_theirs(repo, auto_entries)
 
-        relative_paths = [str(output.relative_to(repo)).replace("\\", "/") for output, _ in prepared]
+        outputs = [output for output, _ in prepared] + auto_outputs
+        relative_paths = [str(output.relative_to(repo)).replace("\\", "/") for output in outputs]
         steps = [_git_step(repo, ["add", "--", *relative_paths], "git add")]
         success = steps[-1]["success"]
         if success and commit:
@@ -1471,6 +1593,7 @@ def apply_manifest(
         return {
             "success": success,
             "merged": [str(output) for output, _ in prepared],
+            "autoTheirs": [str(output.relative_to(repo)).replace("\\", "/") for output in auto_outputs],
             "steps": steps,
         }
     finally:

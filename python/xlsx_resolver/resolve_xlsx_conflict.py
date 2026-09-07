@@ -1,4 +1,4 @@
-"""CLI entry point for Debussy meta XLSX conflict resolution."""
+"""CLI entry point for repository-local XLSX/XLSM conflict resolution."""
 
 from __future__ import annotations
 
@@ -13,7 +13,17 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from xlsx_conflict import ConflictError, apply_manifest, detect_conflicts, find_repo_root, prepare_conflicts
+from xlsx_conflict import (
+    ConflictError,
+    add_auto_theirs_filter,
+    apply_manifest,
+    auto_theirs_path,
+    detect_conflicts,
+    find_repo_root,
+    load_manifest,
+    load_auto_theirs_filters,
+    prepare_conflicts,
+)
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -83,13 +93,32 @@ def _launch_background(repo: Path, manifest: Path, *, open_browser: bool) -> dic
     }
 
 
+def _auto_only(manifest: Path) -> dict | None:
+    """Resolve an all-auto-theirs manifest immediately instead of starting an empty UI."""
+    if load_manifest(manifest)["files"]:
+        return None
+    result = apply_manifest(manifest, {"files": {}})
+    return {
+        "ok": result["success"],
+        "url": None,
+        "manifest": str(manifest),
+        "autoResolved": result.get("autoTheirs", []),
+        "steps": result["steps"],
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Resolve Git XLSX/XLSM conflicts in the sibling Debussy meta repository.")
+    parser = argparse.ArgumentParser(description="Resolve Git XLSX/XLSM conflicts in a Git repository.")
     parser.add_argument("--repo", default=".", help="Git repository (default: %(default)s; the current directory).")
     parser.add_argument("--runtime-dir", help="Optional directory for extracted Git stage workbooks and manifest.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("detect", help="List unresolved .xlsx/.xlsm files.")
+
+    filter_parser = subparsers.add_parser("filter", help="Manage repository-scoped auto-theirs workbook filters.")
+    filter_subparsers = filter_parser.add_subparsers(dest="filter_command", required=True)
+    filter_add = filter_subparsers.add_parser("add", help="Add one case-insensitive workbook path-suffix filter.")
+    filter_add.add_argument("path", help="Relative .xlsx/.xlsm path suffix to adopt from Git stage 3.")
 
     prepare = subparsers.add_parser("prepare", help="Extract base/ours/theirs and build a sheet-aware manifest.")
     prepare.add_argument("--path", help="Only prepare this repository-relative .xlsx/.xlsm path.")
@@ -105,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = subparsers.add_parser("serve", help=argparse.SUPPRESS)
     serve_parser.add_argument("--manifest", required=True)
     serve_parser.add_argument("--no-browser", action="store_true")
+    serve_parser.add_argument("--port", type=int, default=0, help="Fixed listen port (0 = ephemeral).")
 
     apply_parser = subparsers.add_parser("apply", help="Apply a decisions JSON without launching the UI.")
     apply_parser.add_argument("--manifest", required=True)
@@ -119,12 +149,25 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         # serve/apply 仅依赖 manifest（其 repoRoot 在 apply_manifest 内部解析），
-        # 可在非 git 目录下运行；仅 detect/prepare/resolve/launch 需要前置解析仓库。
-        if args.command in ("detect", "prepare", "resolve", "launch"):
+        # 可在非 git 目录下运行；其余公开命令需要前置解析仓库。
+        if args.command in ("detect", "filter", "prepare", "resolve", "launch"):
             repo = find_repo_root(args.repo)
+        if args.command == "filter":
+            result = add_auto_theirs_filter(repo, args.path)
+            _print({"ok": True, "repo": str(repo), **result})
+            return 0
         if args.command == "detect":
             conflicts = detect_conflicts(repo)
-            _print({"ok": True, "repo": str(repo), "count": len(conflicts), "conflicts": conflicts})
+            filters = load_auto_theirs_filters(repo)
+            auto = [item["path"] for item in conflicts if auto_theirs_path(item["path"], filters)]
+            _print({
+                "ok": True,
+                "repo": str(repo),
+                "count": len(conflicts),
+                "reviewCount": len(conflicts) - len(auto),
+                "autoTheirs": auto,
+                "conflicts": conflicts,
+            })
             return 0
         if args.command == "prepare":
             manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
@@ -132,17 +175,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "resolve":
             manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
+            auto = _auto_only(manifest)
+            if auto is not None:
+                _print(auto)
+                return 0 if auto["ok"] else 1
             from merge_server import serve
 
             return 0 if serve(manifest, open_browser=not args.no_browser) else 1
         if args.command == "launch":
             manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
+            auto = _auto_only(manifest)
+            if auto is not None:
+                _print(auto)
+                return 0 if auto["ok"] else 1
             _print(_launch_background(repo, manifest, open_browser=not args.no_browser))
             return 0
         if args.command == "serve":
             from merge_server import serve
 
-            return 0 if serve(args.manifest, open_browser=not args.no_browser) else 1
+            return 0 if serve(args.manifest, open_browser=not args.no_browser, port=args.port) else 1
         decisions = json.loads(Path(args.decisions).read_text(encoding="utf-8"))
         result = apply_manifest(
             args.manifest,
