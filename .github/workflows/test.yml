@@ -8,6 +8,7 @@ on:
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
         python: ["3.9", "3.12"]
@@ -24,6 +25,16 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "ci"
       - name: Unit tests
-        run: python -m unittest discover -s python/tests -v
+        shell: pwsh
+        run: |
+          $output = & python -m unittest discover -s python/tests -v 2>&1
+          $status = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($status -ne 0) {
+            $tail = ($output | Select-Object -Last 60) -join "`n"
+            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Python unit tests failed::$escaped"
+          }
+          exit $status
       - name: Shim selfcheck
         run: node bin/xlmerge.js --selfcheck
