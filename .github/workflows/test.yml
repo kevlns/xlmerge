@@ -31,8 +31,10 @@ jobs:
           $status = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }
           if ($status -ne 0) {
-            $tail = ($output | Select-Object -Last 60) -join "`n"
-            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            $diagnostic = $output | Where-Object {
+              "$_" -match 'FAIL|ERROR|Traceback|AssertionError|FAILED|^Ran |^=+$|^-+$|File "'
+            }
+            $escaped = ($diagnostic -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
             Write-Output "::error title=Python unit tests failed::$escaped"
           }
           exit $status
