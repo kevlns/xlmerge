@@ -105,6 +105,15 @@ body {
   align-items: center;
   gap: 12px;
   border-bottom: var(--border-width) solid var(--border-default);
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.sheet-scope {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .sheet-choice { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
 .macro-label { font-size: 11px; font-weight: 900; color: #3d3529; white-space: nowrap; }
@@ -152,6 +161,35 @@ body {
   color: var(--text-muted);
 }
 .actions { flex: 0 0 auto; margin-left: 0; display: flex; gap: 8px; align-items: center; }
+.sheet-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  border: 2px solid #b8a66d;
+  background: rgba(255, 255, 255, .58);
+}
+.sheet-actions-label {
+  color: #6c5518;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.sheet-actions .btn { padding: 7px 11px; font-size: 12px; }
+.global-stats {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-left: 2px solid #bfb5a0;
+  color: #332d24;
+  white-space: nowrap;
+}
+.global-stats-label { font-size: 11px; font-weight: 900; }
+.global-stats-value { font-size: 16px; font-weight: 900; line-height: 1; }
+.global-stats-divider { color: #8c806c; font-size: 16px; font-weight: 700; }
 .btn {
   padding: 8px 16px;
   border: 1px solid #d8cfbd;
@@ -195,14 +233,44 @@ body {
   font-weight: 600;
   white-space: nowrap;
 }
-.table-container {
+.table-stage {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  position: relative;
+}
+.table-container {
+  width: 100%;
+  height: 100%;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   padding: 16px;
+}
+.confirmed-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(70, 70, 70, .58);
+  cursor: not-allowed;
+}
+.confirmed-overlay-mark {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2ca45d;
+  border: 6px solid #d8ffe5;
+  color: #fff;
+  font-size: 76px;
+  line-height: 1;
+  font-weight: 900;
+  box-shadow: 0 5px 0 #12552e, 0 0 28px rgba(0, 0, 0, .35);
 }
 table.diff-table {
   border-collapse: collapse;
@@ -272,6 +340,7 @@ tr.luban-header th:hover { background: #2d2d2d; color: #f2f2f2; }
   box-shadow: 1px 1px 0 var(--shadow-edge);
 }
 .structure-toggle.is-delete { background: var(--tombstone); color: #fff; border-color: var(--tombstone-dark); }
+.structure-toggle:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
 .structure-badge { display: inline-block; padding: 2px 6px; border: 1px solid rgba(0,0,0,.28); font-size: 10px; font-weight: 800; }
 .structure-badge.added { background: var(--incoming); color: #29401f; }
 .structure-badge.local-existing { background: #eee8dc; color: #4b4438; border-color: #bdb4a4; }
@@ -282,7 +351,28 @@ tr.luban-header th:hover { background: #2d2d2d; color: #f2f2f2; }
 .sheet-tab.sheet-added { background: var(--incoming); }
 .sheet-tab.sheet-deleted { background: var(--tombstone); color: #fff; text-decoration: line-through; }
 .sheet-tab.sheet-structural-conflict::before { content: '◆'; margin-right: 5px; color: #a8392f; }
+.sheet-confirm-checkbox {
+  width: 15px;
+  height: 15px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  accent-color: #278b52;
+  cursor: pointer;
+}
+.sheet-confirm-checkbox:focus-visible { outline: 2px solid #278b52; outline-offset: 2px; }
+.conflict-nav { flex: 0 0 auto; display: flex; gap: 6px; align-items: center; }
+.conflict-nav .btn { padding: 6px 10px; font-size: 11px; }
+.conflict-nav-count { min-width: 48px; text-align: center; color: #4b4438; font-size: 11px; font-weight: 800; }
 .cell-locked { cursor: not-allowed !important; }
+.conflict-cell-flash { animation: conflict-cell-flash .55s ease-in-out 2; position: relative; z-index: 1; }
+@keyframes conflict-cell-flash {
+  0%, 100% { box-shadow: inset 0 0 0 2px rgba(47, 42, 34, .38); }
+  35%, 70% {
+    background-color: #b86cff !important;
+    background-image: none !important;
+    box-shadow: inset 0 0 0 999px rgba(184, 108, 255, .96), 0 0 20px 6px rgba(147, 61, 255, .88);
+  }
+}
 .tooltip {
   position: fixed;
   display: none;
@@ -353,7 +443,9 @@ tr.luban-header th:hover { background: #2d2d2d; color: #f2f2f2; }
   .toolbar { flex-wrap: wrap; }
   .file-tabs { order: 3; flex: 1 0 100%; width: 100%; }
   .actions { width: auto; margin-left: auto; }
-  .sheet-toolbar { align-items: flex-start; }
+  .sheet-toolbar { align-items: flex-start; flex-wrap: wrap; }
+  .sheet-scope { flex: 1 0 100%; }
+  .sheet-actions { margin-left: auto; }
   .footer { align-items: flex-end; }
 }
 </style>
@@ -362,17 +454,30 @@ tr.luban-header th:hover { background: #2d2d2d; color: #f2f2f2; }
 <div class="toolbar">
   <h1>Excel 冲突解决工具</h1>
   <div class="file-tabs" id="fileTabs"></div>
-  <div class="actions">
-    <button type="button" class="btn btn-local" id="allLocalBtn">全部本地</button>
-    <button type="button" class="btn btn-remote" id="allRemoteBtn">全部远端</button>
-    <button type="button" class="btn btn-undo" id="undoBtn">撤销</button>
-    <button type="button" class="btn btn-reset" id="resetBtn">重置</button>
-    <span class="stats"><span id="localCount">0</span> / <span id="totalCount">0</span></span>
+  <div class="global-stats" id="globalConfirmationStats" aria-label="全局冲突 Sheet 确认统计">
+    <span class="global-stats-label">冲突 Sheet 已确认</span>
+    <span class="global-stats-value" id="confirmedSheetCount">0</span>
+    <span class="global-stats-divider" aria-hidden="true">/</span>
+    <span class="global-stats-value" id="totalConflictSheetCount">0</span>
   </div>
 </div>
 <div class="sheet-toolbar">
-  <span class="sheet-label">SHEET</span>
-  <div class="sheet-tabs" id="sheetTabs"></div>
+  <div class="sheet-scope" aria-label="当前 Sheet 工区">
+    <span class="sheet-label">SHEET</span>
+    <div class="sheet-tabs" id="sheetTabs"></div>
+    <div class="sheet-actions" id="sheetActions" aria-label="当前 Sheet 操作">
+      <span class="sheet-actions-label">当前 Sheet 操作</span>
+      <button type="button" class="btn btn-local" id="allLocalBtn">全部本地</button>
+      <button type="button" class="btn btn-remote" id="allRemoteBtn">全部远端</button>
+      <button type="button" class="btn btn-undo" id="undoBtn">撤销</button>
+      <button type="button" class="btn btn-reset" id="resetBtn">重置</button>
+    </div>
+  </div>
+  <div class="conflict-nav" id="conflictNav" aria-label="冲突定位">
+    <button type="button" class="btn" id="prevConflictBtn">上一个冲突</button>
+    <span class="conflict-nav-count" id="conflictNavCount">0 / 0</span>
+    <button type="button" class="btn" id="nextConflictBtn">下一个冲突</button>
+  </div>
   <div class="sheet-choice" id="sheetChoice"></div>
 </div>
 <div class="diff-legend" id="diffLegend">
@@ -383,7 +488,9 @@ tr.luban-header th:hover { background: #2d2d2d; color: #f2f2f2; }
   <span class="legend-item"><i class="legend-swatch legend-deleted"></i>已删除</span>
   <span class="legend-item">悬停 Cell 查看 Base / 本地 / 远端</span>
 </div>
-<div class="table-container" id="tableContainer"></div>
+<div class="table-stage" id="tableStage">
+  <div class="table-container" id="tableContainer"></div>
+</div>
 <div class="tooltip" id="tooltip"></div>
 <div class="commit-modal is-hidden" id="commitModal" role="dialog" aria-modal="true" aria-labelledby="commitModalTitle">
   <div class="commit-modal-backdrop"></div>
@@ -422,7 +529,8 @@ function fileDecision(file) {
 }
 function sheetDecision(file, sheet) {
   const target = fileDecision(file).sheets;
-  if (!target[sheet.name]) target[sheet.name] = {cells: {}, rows: {}, columns: {}};
+  if (!target[sheet.name]) target[sheet.name] = {cells: {}, rows: {}, columns: {}, confirmed: false};
+  if (typeof target[sheet.name].confirmed !== 'boolean') target[sheet.name].confirmed = false;
   return target[sheet.name];
 }
 function cellKey(cell) { return cell.id || cell.coordinate; }
@@ -438,6 +546,7 @@ function initializeDecisions() {
     if (file.macro) fileTarget.macro = file.macro.default || 'ours';
     for (const sheet of file.diff.sheets) {
       const target = sheetDecision(file, sheet);
+      target.confirmed = false;
       const sheetChoice = defaultSheetChoice(sheet);
       if (sheetChoice) target.sheet = sheetChoice;
       if (sheet.renameStatus === 'rename_conflict') target.rename = 'ours';
@@ -481,6 +590,8 @@ function render() {
   renderSheetTabs();
   renderSheetChoice();
   renderTable();
+  renderConflictNavigation();
+  renderActionAvailability();
   updateStats();
 }
 function renderFileTabs() {
@@ -533,7 +644,20 @@ function renderSheetTabs() {
     const deleted = sheet.action === 'auto_delete';
     const structuralConflict = sheet.action.startsWith('conflict_') || sheet.renameStatus === 'rename_conflict' || (sheet.structuralConflictCount || 0) > 0;
     tab.className = 'sheet-tab' + (index === currentSheet ? ' active' : '') + (added ? ' sheet-added' : '') + (deleted ? ' sheet-deleted' : '') + (structuralConflict ? ' sheet-structural-conflict' : '');
-    tab.append(document.createTextNode(sheet.name));
+    const target = sheetDecision(file, sheet);
+    const confirmation = document.createElement('input');
+    confirmation.type = 'checkbox';
+    confirmation.className = 'sheet-confirm-checkbox';
+    confirmation.checked = target.confirmed === true;
+    confirmation.title = '勾选表示你已人工审阅并确认本 Sheet 的所有冲突；取消勾选可继续编辑。';
+    confirmation.setAttribute('aria-label', `${sheet.name}：已确认（人工审阅完成）`);
+    confirmation.onclick = event => event.stopPropagation();
+    confirmation.onchange = event => {
+      event.stopPropagation();
+      target.confirmed = confirmation.checked;
+      render();
+    };
+    tab.append(confirmation, document.createTextNode(sheet.name));
     const count = document.createElement('span');
     count.className = 'tab-count';
     count.textContent = sheetDecisionCount(file, sheet);
@@ -547,7 +671,7 @@ function renderSheetChoice() {
   const file = currentFileData(); const sheet = currentSheetData();
   const macro = file && file.macro;
   if (macro && macro.status !== 'same') {
-    const label = document.createElement('span'); label.className = 'macro-label'; label.textContent = 'VBA/ActiveX';
+    const label = document.createElement('span'); label.className = 'macro-label'; label.textContent = '当前文件宏 · VBA/ActiveX';
     host.append(label);
     if (macro.status === 'conflict') {
       const selected = fileDecision(file).macro || macro.default;
@@ -570,21 +694,22 @@ function renderSheetChoice() {
   }
   if (!sheet) return;
   const target = sheetDecision(file, sheet);
+  const confirmed = sheetNeedsConfirmation(sheet) && target.confirmed;
   if (sheet.renameStatus === 'rename_conflict') {
     const local = document.createElement('button'); local.className = 'structure-toggle' + (target.rename === 'ours' ? '' : ' is-delete');
-    local.textContent = `本地名：${sheet.names.ours}`; local.onclick = () => chooseRename(file, sheet, 'ours');
+    local.textContent = `本地名：${sheet.names.ours}`; local.disabled = confirmed; local.onclick = () => chooseRename(file, sheet, 'ours');
     const remote = document.createElement('button'); remote.className = 'structure-toggle' + (target.rename === 'theirs' ? '' : ' is-delete');
-    remote.textContent = `远端名：${sheet.names.theirs}`; remote.onclick = () => chooseRename(file, sheet, 'theirs');
+    remote.textContent = `远端名：${sheet.names.theirs}`; remote.disabled = confirmed; remote.onclick = () => chooseRename(file, sheet, 'theirs');
     host.append(local, remote);
   }
   if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') {
     const label = document.createElement('span'); label.className = 'macro-label'; label.textContent = '合并表头';
     const local = document.createElement('button');
     local.className = 'btn btn-local macro-toggle' + (target.mergedCells === 'ours' ? ' is-selected' : '');
-    local.textContent = '本地结构'; local.onclick = () => chooseMergedCells(file, sheet, 'ours');
+    local.textContent = '本地结构'; local.disabled = confirmed; local.onclick = () => chooseMergedCells(file, sheet, 'ours');
     const remote = document.createElement('button');
     remote.className = 'btn btn-remote macro-toggle' + (target.mergedCells === 'theirs' ? ' is-selected' : '');
-    remote.textContent = '远端结构'; remote.onclick = () => chooseMergedCells(file, sheet, 'theirs');
+    remote.textContent = '远端结构'; remote.disabled = confirmed; remote.onclick = () => chooseMergedCells(file, sheet, 'theirs');
     host.append(label, local, remote);
   }
 }
@@ -607,12 +732,15 @@ function renderTable() {
   const sheet = currentSheetData();
   const host = byId('tableContainer');
   host.replaceChildren();
+  const oldOverlay = byId('confirmedOverlay');
+  if (oldOverlay) oldOverlay.remove();
   if (!sheet) {
     renderMessage(host, '无需处理', '两侧工作簿内容一致，没有需要展示的 Sheet 差异。');
     return;
   }
   if (sheet.action.startsWith('conflict_')) {
     renderSheetConflict(host, file, sheet);
+    renderConfirmedOverlay(host, file, sheet);
     return;
   }
   if (sheet.action !== 'merge') {
@@ -622,9 +750,105 @@ function renderTable() {
       auto_delete: '该 Sheet 的删除只发生在一侧，另一侧未修改，将自动删除。'
     };
     renderMessage(host, sheet.name, labels[sheet.action] || `将自动执行：${sheet.action}`);
+    renderConfirmedOverlay(host, file, sheet);
     return;
   }
   renderDiffTable(host, file, sheet);
+  renderConfirmedOverlay(host, file, sheet);
+}
+function sheetNeedsConfirmation(sheet) {
+  return !!sheet && sheet.needsAttention !== false;
+}
+function renderConfirmedOverlay(host, file, sheet) {
+  if (!sheetNeedsConfirmation(sheet) || !sheetDecision(file, sheet).confirmed) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'confirmedOverlay';
+  overlay.className = 'confirmed-overlay';
+  overlay.title = '本 Sheet 已确认；取消 Sheet 标签前的勾选后可继续编辑。';
+  overlay.setAttribute('aria-label', '本 Sheet 已确认，表格交互已锁定');
+  const mark = document.createElement('div');
+  mark.className = 'confirmed-overlay-mark';
+  mark.textContent = '✓';
+  overlay.append(mark);
+  byId('tableStage').append(overlay);
+}
+function currentSheetIsConfirmed() {
+  const file = currentFileData(); const sheet = currentSheetData();
+  return !!file && sheetNeedsConfirmation(sheet) && sheetDecision(file, sheet).confirmed;
+}
+function renderActionAvailability() {
+  const confirmed = currentSheetIsConfirmed();
+  byId('allLocalBtn').disabled = confirmed;
+  byId('allRemoteBtn').disabled = confirmed;
+  const file = currentFileData(); const sheet = currentSheetData();
+  const scope = file && sheet ? `当前 Sheet：${file.path} / ${sheet.name}` : '当前 Sheet';
+  const message = confirmed ? `${scope} 已确认；取消 Sheet 标签前的勾选后可继续编辑。` : `${scope} 的批量操作`;
+  byId('allLocalBtn').title = `${message}：将可处理项全部采用本地。`;
+  byId('allRemoteBtn').title = `${message}：将可处理项全部采用远端。`;
+  byId('undoBtn').title = `${scope}：撤销最近一次选择，不影响其它 Sheet 或文件级宏。`;
+  byId('resetBtn').title = `${scope}：恢复本 Sheet 的默认决策，不影响其它 Sheet 或文件级宏。`;
+}
+function navigableConflictCells(file, sheet) {
+  if (!sheet || !sheetNeedsConfirmation(sheet)) return [];
+  if (sheet.columns && sheet.allRows) {
+    return (sheet.cells || []).filter(cell => cell.resolution === 'conflict' && structuralCellSelectable(file, sheet, cell));
+  }
+  return (sheet.cells || []).filter(cell => cell.resolution === 'conflict');
+}
+function conflictCellKey(cell) { return cell && (cell.id || cell.coordinate); }
+function renderConflictNavigation() {
+  const file = currentFileData(); const sheet = currentSheetData();
+  const cells = navigableConflictCells(file, sheet);
+  const count = byId('conflictNavCount');
+  const previous = byId('prevConflictBtn'); const next = byId('nextConflictBtn');
+  if (!count || !previous || !next) return;
+  const currentId = sheet && sheetDecision(file, sheet).lastNavigatedConflict;
+  const currentIndex = cells.findIndex(cell => conflictCellKey(cell) === currentId);
+  count.textContent = cells.length ? `${currentIndex < 0 ? 0 : currentIndex + 1} / ${cells.length}` : '0 / 0';
+  previous.disabled = cells.length === 0;
+  next.disabled = cells.length === 0;
+  previous.title = cells.length ? '定位到当前 Sheet 的上一个可处理冲突（循环）' : '当前 Sheet 没有可定位的冲突';
+  next.title = cells.length ? '定位到当前 Sheet 的下一个可处理冲突（循环）' : '当前 Sheet 没有可定位的冲突';
+}
+function markConflictCell(cellElement) {
+  if (!cellElement) return;
+  cellElement.classList.remove('conflict-cell-flash');
+  // Force a reflow so repeated navigation to the same cell restarts the flash.
+  void cellElement.offsetWidth;
+  cellElement.classList.add('conflict-cell-flash');
+  window.setTimeout(() => cellElement.classList.remove('conflict-cell-flash'), 1300);
+}
+function locateConflictCell(direction) {
+  const file = currentFileData(); const sheet = currentSheetData();
+  const cells = navigableConflictCells(file, sheet);
+  if (!cells.length) return;
+  const state = sheetDecision(file, sheet);
+  const currentId = state.lastNavigatedConflict;
+  let index = cells.findIndex(cell => conflictCellKey(cell) === currentId);
+  index = index < 0 ? (direction > 0 ? 0 : cells.length - 1) : (index + direction + cells.length) % cells.length;
+  const target = cells[index];
+  state.lastNavigatedConflict = conflictCellKey(target);
+  const rowNumber = target.row;
+  if (!(sheet.columns && sheet.allRows) && rowNumber !== undefined) {
+    const rows = [...new Set((sheet.cells || []).map(cell => cell.row))].sort((a, b) => a - b);
+    currentPage = Math.floor(Math.max(0, rows.indexOf(rowNumber)) / PAGE_SIZE);
+  } else if (sheet.columns && sheet.allRows) {
+    const rows = sheet.rows || [];
+    const rowIndex = rows.findIndex(row => row.id === target.rowId);
+    currentPage = Math.floor(Math.max(0, rowIndex) / PAGE_SIZE);
+  }
+  renderTable();
+  renderConflictNavigation();
+  requestAnimationFrame(() => {
+    const element = [...byId('tableContainer').querySelectorAll('[data-conflict-id]')]
+      .find(item => item.dataset.conflictId === conflictCellKey(target));
+    if (!element) return;
+    const container = byId('tableContainer');
+    container.scrollTop = Math.max(0, element.offsetTop - container.clientHeight / 2);
+    container.scrollLeft = Math.max(0, element.offsetLeft - container.clientWidth / 2);
+    element.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    markConflictCell(element);
+  });
 }
 function renderMessage(host, title, message) {
   const box = document.createElement('div');
@@ -813,7 +1037,10 @@ function renderStructuralTable(host, file, sheet) {
       } else cell.className = 'cell-no-conflict' + (structurallyLocked ? ' cell-locked' : '');
       if (cellData) {
         cell.textContent = fmtVal(structuralCellValue(target, cellData));
-        if (structuralCellSelectable(file, sheet, cellData)) cell.onclick = () => cycleCell(file, sheet, cellData);
+        if (structuralCellSelectable(file, sheet, cellData)) {
+          cell.onclick = () => cycleCell(file, sheet, cellData);
+          if (cellData.resolution === 'conflict') cell.dataset.conflictId = cellData.id;
+        }
         bindStructuralTip(cell, file, sheet, axisRow, column, cellData);
       }
       row.append(cell);
@@ -881,6 +1108,7 @@ function renderLegacyDiffTable(host, file, sheet) {
         cell.className = choice === 'ours' ? 'cell-local' : 'cell-remote';
         cell.textContent = fmtVal(choice === 'ours' ? changed.ours : changed.theirs);
         cell.onclick = () => cycleCell(file, sheet, changed);
+        if (changed.resolution === 'conflict') cell.dataset.conflictId = changed.id || changed.coordinate;
       } else {
         cell.className = 'cell-no-conflict';
         cell.textContent = fmtVal(gridVal(sheet, rowNumber, col));
@@ -970,7 +1198,7 @@ function cycleCell(file, sheet, cell) {
   const target = sheetDecision(file, sheet); pushCellUndo(file, sheet, cell);
   const key = cellKey(cell);
   target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
-  renderTable(); updateStats();
+  renderTable(); renderConflictNavigation(); updateStats();
 }
 function chooseSheet(file, sheet, side) {
   const target = sheetDecision(file, sheet);
@@ -991,7 +1219,7 @@ function toggleAxis(file, sheet, kind, axis) {
   const target = sheetDecision(file, sheet); const previous = target[kind][axis.id] || axis.default;
   undoStack.push({kind: 'axis', fileId: file.id, sheet: sheet.name, axisKind: kind, axisId: axis.id, previous});
   target[kind][axis.id] = previous === 'keep' ? 'delete' : 'keep';
-  renderSheetTabs(); renderTable(); updateStats();
+  renderSheetTabs(); renderTable(); renderConflictNavigation(); updateStats();
 }
 function chooseMacro(file, side) {
   const target = fileDecision(file); const previous = target.macro || file.macro.default;
@@ -1005,11 +1233,7 @@ function sideAxisChoice(axis, side) {
 }
 function bulkChoose(side) {
   const file = currentFileData(); const sheet = currentSheetData(); if (!sheet) return;
-  if (file.macro && file.macro.status === 'conflict' && (side !== 'theirs' || file.macro.canChooseTheirs)) {
-    const fileTarget = fileDecision(file);
-    undoStack.push({kind: 'macro', fileId: file.id, previous: fileTarget.macro || file.macro.default});
-    fileTarget.macro = side;
-  }
+  if (currentSheetIsConfirmed()) return;
   if (sheet.action.startsWith('conflict_')) { chooseSheet(file, sheet, side); return; }
   const target = sheetDecision(file, sheet);
   if (sheet.renameStatus === 'rename_conflict') {
@@ -1043,7 +1267,7 @@ function bulkStructuralRow(rowId) {
     pushCellUndo(file, sheet, cell); const key = cellKey(cell);
     target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
   }
-  renderTable(); updateStats();
+  renderTable(); renderConflictNavigation(); updateStats();
 }
 function bulkStructuralColumn(columnId) {
   const file = currentFileData(); const sheet = currentSheetData(); const target = sheetDecision(file, sheet);
@@ -1055,7 +1279,7 @@ function bulkStructuralColumn(columnId) {
     pushCellUndo(file, sheet, cell); const key = cellKey(cell);
     target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
   }
-  renderTable(); updateStats();
+  renderTable(); renderConflictNavigation(); updateStats();
 }
 function bulkRow(row) {
   const file = currentFileData(); const sheet = currentSheetData();
@@ -1063,7 +1287,7 @@ function bulkRow(row) {
     const target = sheetDecision(file, sheet); pushCellUndo(file, sheet, cell);
     const key = cellKey(cell); target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
   }
-  renderTable(); updateStats();
+  renderTable(); renderConflictNavigation(); updateStats();
 }
 function bulkCol(col) {
   const file = currentFileData(); const sheet = currentSheetData();
@@ -1071,14 +1295,25 @@ function bulkCol(col) {
     const target = sheetDecision(file, sheet); pushCellUndo(file, sheet, cell);
     const key = cellKey(cell); target.cells[key] = target.cells[key] === 'ours' ? 'theirs' : 'ours';
   }
-  renderTable(); updateStats();
+  renderTable(); renderConflictNavigation(); updateStats();
 }
 function undo() {
-  const action = undoStack.pop(); if (!action) return;
-  const file = model.files.find(item => item.id === action.fileId);
-  if (action.kind === 'macro') { fileDecision(file).macro = action.previous; render(); return; }
-  const sheet = file.diff.sheets.find(item => item.name === action.sheet);
-  const target = sheetDecision(file, sheet);
+  const file = currentFileData(); const sheet = currentSheetData();
+  if (!file || !sheet) return;
+  let actionIndex = -1;
+  for (let index = undoStack.length - 1; index >= 0; index--) {
+    const candidate = undoStack[index];
+    if (candidate.fileId === file.id && candidate.sheet === sheet.name) {
+      actionIndex = index;
+      break;
+    }
+  }
+  if (actionIndex < 0) return;
+  const [action] = undoStack.splice(actionIndex, 1);
+  const actionFile = model.files.find(item => item.id === action.fileId);
+  const actionSheet = actionFile.diff.sheets.find(item => item.name === action.sheet);
+  const target = sheetDecision(actionFile, actionSheet);
+  target.confirmed = false;
   if (action.kind === 'sheet') target.sheet = action.previous;
   else if (action.kind === 'rename') target.rename = action.previous;
   else if (action.kind === 'mergedCells') target.mergedCells = action.previous;
@@ -1086,22 +1321,36 @@ function undo() {
   else target.cells[action.key] = action.previous;
   render();
 }
-function resetFile() {
+function resetSheet() {
   const file = currentFileData();
-  if (file.macro) fileDecision(file).macro = file.macro.default || 'ours';
-  for (const sheet of file.diff.sheets) {
-    const target = sheetDecision(file, sheet); const sheetChoice = defaultSheetChoice(sheet);
-    if (sheetChoice) target.sheet = sheetChoice;
-    if (sheet.renameStatus === 'rename_conflict') target.rename = 'ours';
-    if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') target.mergedCells = sheet.mergedCells.default || 'ours';
-    target.rows = {}; target.columns = {};
-    for (const row of sheet.allRows || sheet.rows || []) if (row.state === 'delete_modify') target.rows[row.id] = row.default;
-    for (const column of sheet.columns || []) if (column.state === 'delete_modify') target.columns[column.id] = column.default;
-    for (const cell of sheet.cells || []) target.cells[cellKey(cell)] = defaultCellChoice(cell);
-  }
-  undoStack = []; render();
+  const sheet = currentSheetData();
+  if (!file || !sheet) return;
+  const target = sheetDecision(file, sheet); const sheetChoice = defaultSheetChoice(sheet);
+  target.confirmed = false;
+  delete target.lastNavigatedConflict;
+  if (sheetChoice) target.sheet = sheetChoice; else delete target.sheet;
+  if (sheet.renameStatus === 'rename_conflict') target.rename = 'ours'; else delete target.rename;
+  if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') target.mergedCells = sheet.mergedCells.default || 'ours'; else delete target.mergedCells;
+  target.rows = {}; target.columns = {}; target.cells = {};
+  for (const row of sheet.allRows || sheet.rows || []) if (row.state === 'delete_modify') target.rows[row.id] = row.default;
+  for (const column of sheet.columns || []) if (column.state === 'delete_modify') target.columns[column.id] = column.default;
+  for (const cell of sheet.cells || []) target.cells[cellKey(cell)] = defaultCellChoice(cell);
+  // A reset supersedes prior choices for this Sheet, while preserving other files,
+  // other Sheets, and file-level macro choices in the shared undo history.
+  undoStack = undoStack.filter(action => action.fileId !== file.id || action.sheet !== sheet.name);
+  render();
 }
-function updateStats() {
+function updateGlobalConfirmationStats() {
+  let confirmed = 0; let total = 0;
+  for (const file of model.files) for (const sheet of file.diff.sheets) {
+    if (!sheetNeedsConfirmation(sheet)) continue;
+    total++;
+    if (sheetDecision(file, sheet).confirmed) confirmed++;
+  }
+  byId('confirmedSheetCount').textContent = String(confirmed);
+  byId('totalConflictSheetCount').textContent = String(total);
+}
+function updateDecisionFooterStats() {
   let total = 0; let local = 0;
   for (const file of model.files) {
     if (file.macro && file.macro.status === 'conflict') {
@@ -1126,9 +1375,12 @@ function updateStats() {
     }
     }
   }
-  byId('localCount').textContent = String(local); byId('totalCount').textContent = String(total);
   const file = currentFileData(); const sheet = currentSheetData();
   byId('footerStatus').textContent = `共 ${total} 个可决策项，${local} 项采用本地 · 当前：${file.path}${sheet ? ` / ${sheet.name}` : ''}${autoTheirsNote(' · ')}`;
+}
+function updateStats() {
+  updateGlobalConfirmationStats();
+  updateDecisionFooterStats();
 }
 
 function renderCommitSteps(steps) {
@@ -1171,8 +1423,49 @@ function renderCommitMessage(text) {
   line.textContent = text || '（无冲突 Cell，将使用默认提交信息）';
   host.append(line);
 }
+function unconfirmedSheets() {
+  const pending = [];
+  for (const [fileIndex, file] of model.files.entries()) {
+    for (const [sheetIndex, sheet] of file.diff.sheets.entries()) {
+      if (!sheetNeedsConfirmation(sheet) || sheetDecision(file, sheet).confirmed) continue;
+      pending.push({file, sheet, fileIndex, sheetIndex, label: `${file.path}-${sheet.name}`});
+    }
+  }
+  return pending;
+}
+function renderUnconfirmedSheetList(pending) {
+  const host = byId('commitModalSteps'); host.replaceChildren();
+  for (const item of pending) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-cancel';
+    button.style.display = 'block';
+    button.style.width = '100%';
+    button.style.marginBottom = '7px';
+    button.style.textAlign = 'left';
+    button.textContent = item.label;
+    button.title = `切换到 ${item.label}`;
+    button.onclick = () => {
+      currentFile = item.fileIndex;
+      currentSheet = item.sheetIndex;
+      currentPage = 0;
+      closeCommitModal();
+      render();
+    };
+    host.append(button);
+  }
+}
 async function submitResolve() {
   const button = byId('submitBtn');
+  const pending = unconfirmedSheets();
+  if (pending.length) {
+    byId('footerStatus').textContent = `仍有 ${pending.length} 个 Sheet 未确认，请先完成审阅。`;
+    showCommitModal('', '仍有未确认的 Sheet', '提交前必须人工勾选确认每个需要审阅的 Sheet。点击下方条目可直接切换过去。', [], [
+      {label: '返回继续审阅', className: 'btn-submit', onclick: () => { closeCommitModal(); button.disabled = false; }}
+    ]);
+    renderUnconfirmedSheetList(pending);
+    return;
+  }
   button.disabled = true;
   byId('footerStatus').textContent = '正在生成 commit 信息预览...';
   try {
@@ -1216,9 +1509,11 @@ async function doSubmitResolve() {
 byId('allLocalBtn').onclick = () => bulkChoose('ours');
 byId('allRemoteBtn').onclick = () => bulkChoose('theirs');
 byId('undoBtn').onclick = undo;
-byId('resetBtn').onclick = resetFile;
+byId('resetBtn').onclick = resetSheet;
 byId('cancelBtn').onclick = cancelAndExit;
 byId('submitBtn').onclick = submitResolve;
+byId('prevConflictBtn').onclick = () => locateConflictCell(-1);
+byId('nextConflictBtn').onclick = () => locateConflictCell(1);
 enableHorizontalWheel(byId('fileTabs'));
 enableHorizontalWheel(byId('sheetTabs'));
 init().catch(error => { byId('footerStatus').textContent = `加载失败: ${error.message}`; });

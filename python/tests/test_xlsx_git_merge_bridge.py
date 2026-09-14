@@ -15,6 +15,33 @@ from xlsx_merge_engine import xlsx_git_merge_bridge as bridge_mod
 from xlsx_merge_engine.xlsx_git_merge_bridge import RowProjection, analyze_workbooks, _row_side_alignment
 
 
+class FormulaValueAlignmentTests(unittest.TestCase):
+    def test_constant_results_do_not_hide_delete_insert_and_recalculation(self):
+        def records(order, multiplier):
+            return [
+                RowProjection(
+                    index + 5,
+                    (None, key * 100 + 7, f"item-{key}", key, 7, key * multiplier, "=literal", True, "2020-01-02"),
+                    {},
+                )
+                for index, key in enumerate(order)
+            ]
+
+        base = records([1, 2, 3, 4, 5, 6], 10)
+        side = records([1, 3, 90, 4, 5, 6], 11)
+        expected = {0: 0, 2: 1, 3: 3, 4: 4, 5: 5}
+        for fast in (False, True):
+            old = bridge_mod._FAST_ALIGN_THRESHOLD
+            try:
+                if fast:
+                    bridge_mod._FAST_ALIGN_THRESHOLD = 1
+                matches, insertions = _row_side_alignment(base, side)
+                self.assertEqual(matches, expected)
+                self.assertEqual([index for group in insertions.values() for index in group], [2])
+            finally:
+                bridge_mod._FAST_ALIGN_THRESHOLD = old
+
+
 def write_book(path, fields, rows, *, sheet="Data"):
     wb = Workbook()
     ws = wb.active

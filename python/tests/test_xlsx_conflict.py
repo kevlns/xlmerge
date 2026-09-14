@@ -1,10 +1,12 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -34,6 +36,33 @@ from xlsx_conflict import (
 )
 
 
+def mock_materialize_values(source, destination):
+    """Deterministic test double: replace formulas with their fresh cache value."""
+    source = Path(source)
+    destination = Path(destination)
+    shutil.copy2(source, destination)
+    formulas = load_workbook(destination, data_only=False)
+    cached = load_workbook(source, data_only=True)
+    try:
+        for ws in formulas.worksheets:
+            cached_ws = cached[ws.title]
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.data_type != "f":
+                        continue
+                    value = cached_ws[cell.coordinate].value
+                    if value is None and cell.value == "=1+2":
+                        value = 3
+                    cell.value = value
+                    if isinstance(value, str) and value.startswith("="):
+                        cell.data_type = "s"
+        formulas.save(destination)
+    finally:
+        formulas.close()
+        cached.close()
+    return destination
+
+
 def git(repo, *args, check=True):
     result = subprocess.run(
         ["git", "-C", str(repo), *args],
@@ -60,7 +89,10 @@ def write_book(path, version):
 
     auto = wb.create_sheet("Auto")
     auto["A1"] = "ours-auto" if version == "ours" else "base-auto"
-    auto["B1"] = "=1+2" if version == "theirs" else "base-formula"
+    # Formula semantics are covered by the dedicated mocked/Excel tests below;
+    # keep this broad integration fixture cache-independent for subprocess UI
+    # tests that cannot install a Python mock in the child process.
+    auto["B1"] = 3 if version == "theirs" else "base-formula"
     if version == "theirs":
         auto["B1"].fill = PatternFill("solid", fgColor="00FF00")
 
@@ -276,7 +308,7 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
             self.assertEqual(wb["Alpha"]["B2"].value, "ours-alpha")
             self.assertEqual(wb["Beta"]["A1"].value, "theirs-beta")
             self.assertEqual(wb["Auto"]["A1"].value, "ours-auto")
-            self.assertEqual(wb["Auto"]["B1"].value, "=1+2")
+            self.assertEqual(wb["Auto"]["B1"].value, 3)
             self.assertEqual(wb["Auto"]["B1"].fill.fgColor.rgb, "0000FF00")
             self.assertEqual(wb["DeleteModify"]["A1"].value, "changed-theirs")
             self.assertEqual(wb["OursOnly"]["A1"].value, "ours-only")
@@ -291,6 +323,54 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
             apply_manifest(manifest_path, {"files": {}}, commit=False)
         self.assertEqual(self.path.read_bytes(), before)
         self.assertTrue(git(self.repo, "ls-files", "-u").stdout.strip())
+
+    def _complete_decisions(self):
+        return {
+            "files": {
+                "new_meta/MultiSheet.xlsx": {
+                    "sheets": {
+                        "Alpha": {"cells": {"B2": "ours"}},
+                        "Beta": {"cells": {"A1": "ours"}},
+                        "DeleteModify": {"sheet": "ours", "cells": {}},
+                    }
+                }
+            }
+        }
+
+    def test_tampered_value_snapshot_is_rejected_before_any_writeback(self):
+        manifest_path = prepare_conflicts(self.repo, runtime_dir=Path(self.temp.name) / "runtime")
+        manifest = load_manifest(manifest_path)
+        entry = manifest["files"][0]
+        snapshot = Path(entry["valueSnapshots"]["ours"]["valuePath"])
+        before_output = self.path.read_bytes()
+        before_index = git(self.repo, "ls-files", "--stage").stdout
+        snapshot.write_bytes(snapshot.read_bytes() + b"tampered")
+        with self.assertRaises(ConflictError):
+            apply_manifest(manifest_path, self._complete_decisions(), commit=False)
+        self.assertEqual(self.path.read_bytes(), before_output)
+        self.assertEqual(git(self.repo, "ls-files", "--stage").stdout, before_index)
+        self.assertTrue(git(self.repo, "ls-files", "-u").stdout.strip())
+
+    def test_tampered_source_or_worktree_is_rejected_without_writing(self):
+        for tamper_kind in ("source", "worktree"):
+            with self.subTest(tamper_kind=tamper_kind):
+                runtime = Path(self.temp.name) / f"runtime-{tamper_kind}"
+                manifest_path = prepare_conflicts(self.repo, runtime_dir=runtime)
+                manifest = load_manifest(manifest_path)
+                entry = manifest["files"][0]
+                target = Path(entry["ours"]) if tamper_kind == "source" else self.path
+                original = target.read_bytes()
+                before_output = self.path.read_bytes()
+                target.write_bytes(original + b"tampered")
+                before_index = git(self.repo, "ls-files", "--stage").stdout
+                try:
+                    with self.assertRaises(ConflictError):
+                        apply_manifest(manifest_path, self._complete_decisions(), commit=False)
+                    expected_output = original + b"tampered" if tamper_kind == "worktree" else before_output
+                    self.assertEqual(self.path.read_bytes(), expected_output)
+                    self.assertEqual(git(self.repo, "ls-files", "--stage").stdout, before_index)
+                finally:
+                    target.write_bytes(original)
 
     def test_local_http_api_exposes_all_sheets_and_applies_sheet_scoped_choices(self):
         runtime = Path(self.temp.name) / "runtime"
@@ -399,8 +479,30 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
         required_fragments = [
             'id="fileTabs"',
             'id="sheetTabs"',
+            'id="prevConflictBtn"',
+            'id="nextConflictBtn"',
+            'data-conflict-id',
+            'conflict-cell-flash',
+            'animation: conflict-cell-flash .55s ease-in-out 2;',
+            'background-color: #b86cff !important;',
+            'background-image: none !important;',
+            'inset 0 0 0 999px rgba(184, 108, 255, .96)',
+            'sheet-confirm-checkbox',
+            'confirmed-overlay',
+            'id="tableStage"',
+            'function renderActionAvailability(',
+            'target.confirmed = false;',
+            'function unconfirmedSheets(',
+            '仍有未确认的 Sheet',
+            'file.path}-${sheet.name}',
+            'function locateConflictCell(',
             'id="allLocalBtn"',
             'id="allRemoteBtn"',
+            'id="sheetActions"',
+            '当前 Sheet 操作',
+            'id="confirmedSheetCount"',
+            'id="totalConflictSheetCount"',
+            '冲突 Sheet 已确认',
             'id="cancelBtn"',
             "function cancelAndExit(",
             "fetch('/api/shutdown'",
@@ -445,11 +547,46 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
             "kept ? '已保留' : '已删除'",
             "合并后 ${output.columns.get(column.id) || '删除'}",
             "html { width: 100%; height: 100%; overflow: hidden; }",
-            ".table-container {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;",
+            ".table-stage {\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;",
+            ".table-container {\n  width: 100%;\n  height: 100%;\n  overflow: auto;",
             ".footer {\n  position: relative;\n  z-index: 20;\n  flex: 0 0 auto;",
         ]
         for fragment in required_fragments:
             self.assertIn(fragment, html)
+        self.assertLess(
+            html.find("const pending = unconfirmedSheets();"),
+            html.find("fetch('/api/commit-preview'"),
+            "unconfirmed Sheet gate must run before commit-preview",
+        )
+
+    def test_ui_actions_are_sheet_scoped_and_confirmation_stats_are_global(self):
+        html = (RESOLVER_DIR / "merge_ui.html").read_text(encoding="utf-8")
+        toolbar_start = html.find('<div class="toolbar">')
+        sheet_toolbar_start = html.find('<div class="sheet-toolbar">')
+        sheet_actions_start = html.find('id="sheetActions"')
+        self.assertGreaterEqual(toolbar_start, 0)
+        self.assertGreater(sheet_toolbar_start, toolbar_start)
+        self.assertGreater(sheet_actions_start, sheet_toolbar_start)
+        self.assertLess(html.find('id="allLocalBtn"'), html.find('</div>\n  </div>\n  <div class="conflict-nav"', sheet_actions_start))
+        self.assertNotIn("fileTarget.macro = side", html[html.find("function bulkChoose("):html.find("function bulkStructuralRow(")])
+        undo_start = html.find("function undo()")
+        undo_end = html.find("function resetSheet()", undo_start)
+        undo_source = html[undo_start:undo_end]
+        self.assertIn("candidate.fileId === file.id && candidate.sheet === sheet.name", undo_source)
+        self.assertIn("undoStack.splice(actionIndex, 1)", undo_source)
+        self.assertNotIn("action.kind === 'macro'", undo_source)
+        reset_start = html.find("function resetSheet()")
+        reset_end = html.find("function updateGlobalConfirmationStats()", reset_start)
+        reset_source = html[reset_start:reset_end]
+        self.assertIn("currentSheetData()", reset_source)
+        self.assertIn("undoStack = undoStack.filter", reset_source)
+        self.assertNotIn("for (const sheet of file.diff.sheets)", reset_source)
+        self.assertNotIn("fileDecision(file).macro", reset_source)
+        self.assertIn("function updateGlobalConfirmationStats()", html)
+        self.assertIn("function updateDecisionFooterStats()", html)
+        self.assertIn("if (!sheetNeedsConfirmation(sheet)) continue;", html)
+        self.assertNotIn('class="sheet-scope-label"', html)
+        self.assertNotIn('global-stats-total-label', html)
 
     def test_launch_returns_background_url_without_manual_diff_step(self):
         runtime = Path(self.temp.name) / "launch-runtime"
@@ -766,7 +903,7 @@ class StructuralMergeTests(unittest.TestCase):
             merged.unlink(missing_ok=True)
 
     def test_formula_cell_cache_survives_structural_rebuild(self):
-        # 公式 cell 重建后必须保留公式和缓存值：Luban 用 data_only 读取缓存值
+        # 受影响 Sheet 的公式必须使用本次 materialize 的新鲜值固化为 literal。
         import zipfile
         import xml.etree.ElementTree as ET
 
@@ -803,26 +940,28 @@ class StructuralMergeTests(unittest.TestCase):
         save_with_cache(self.ours, 150, 1500)
         save_with_cache(self.theirs, 200, 2000)
 
-        diff = diff_workbooks(self.base, self.ours, self.theirs, analysis_dir=self.root / "analysis")
-        sheet = diff["sheets"][0]
-        # 公式相同但引用值不同 -> 缓存值不同 -> conflict
-        conflict = next(cell for cell in sheet["cells"] if cell["resolution"] == "conflict")
-        self.assertEqual(conflict["ours"], 1500)
-        self.assertEqual(conflict["theirs"], 2000)
-        merged = self.merge(diff, {"cells": {conflict["id"]: "ours"}})
-        try:
-            wb = load_workbook(merged, data_only=False)
+        with patch("formula_values.materialize_values", side_effect=mock_materialize_values):
+            diff = diff_workbooks(self.base, self.ours, self.theirs, analysis_dir=self.root / "analysis")
+            sheet = diff["sheets"][0]
+            # 公式相同但引用值不同 -> fresh materialized values differ -> conflict
+            conflict = next(cell for cell in sheet["cells"] if cell["resolution"] == "conflict")
+            self.assertEqual(conflict["ours"], 1500)
+            self.assertEqual(conflict["theirs"], 2000)
+            merged = self.merge(diff, {"cells": {conflict["id"]: "ours"}})
             try:
-                self.assertEqual(wb["Data"]["B5"].value, "=C5*10")
+                wb = load_workbook(merged, data_only=False)
+                try:
+                    self.assertEqual(wb["Data"]["B5"].value, 1500)
+                    self.assertNotEqual(wb["Data"]["B5"].data_type, "f")
+                finally:
+                    wb.close()
+                wb_v = load_workbook(merged, data_only=True)
+                try:
+                    self.assertEqual(wb_v["Data"]["B5"].value, 1500)
+                finally:
+                    wb_v.close()
             finally:
-                wb.close()
-            wb_v = load_workbook(merged, data_only=True)
-            try:
-                self.assertEqual(wb_v["Data"]["B5"].value, 1500)
-            finally:
-                wb_v.close()
-        finally:
-            merged.unlink(missing_ok=True)
+                merged.unlink(missing_ok=True)
 
     def test_noncanonical_freeze_pane_view_survives_structural_rebuild(self):
         write_luban_anonymous_book(self.base, "base", pane_top_left="D32")
@@ -1066,6 +1205,40 @@ class StructuralMergeTests(unittest.TestCase):
         finally:
             deleted.unlink(missing_ok=True)
 
+    def test_locally_deleted_row_with_remote_modification_can_be_restored(self):
+        """A delete_modify_ours row starts deleted, but keep restores remote cells."""
+        write_grid(self.base, [[1, "a"], [2, "b"], [3, "c"]])
+        write_grid(self.ours, [[1, "a"], [3, "c"]])
+        write_grid(self.theirs, [[1, "a"], [2, "remote"], [3, "c"]])
+        diff = diff_workbooks(self.base, self.ours, self.theirs, analysis_dir=self.root / "analysis")
+        sheet = next(item for item in diff["sheets"] if item["name"] == "Data")
+        row = next(item for item in sheet["allRows"] if item["status"] == "delete_modify_ours")
+        self.assertEqual(row["default"], "delete")
+        restored_cells = [cell for cell in sheet["cells"] if cell["rowId"] == row["id"]]
+        self.assertTrue(restored_cells)
+        self.assertTrue(any(cell["resolution"] == "conflict" and cell["theirs"] == "remote" for cell in restored_cells))
+
+        remote_choices = {cell["id"]: "theirs" for cell in restored_cells if cell["resolution"] == "conflict"}
+        kept = self.merge(diff, {"rows": {row["id"]: "keep"}, "columns": {}, "cells": remote_choices})
+        try:
+            wb = load_workbook(kept)
+            try:
+                self.assertEqual(list(wb["Data"].values), [(1, "a"), (2, "remote"), (3, "c")])
+            finally:
+                wb.close()
+        finally:
+            kept.unlink(missing_ok=True)
+
+        deleted = self.merge(diff, {"rows": {row["id"]: "delete"}, "columns": {}, "cells": remote_choices})
+        try:
+            wb = load_workbook(deleted)
+            try:
+                self.assertEqual(list(wb["Data"].values), [(1, "a"), (3, "c")])
+            finally:
+                wb.close()
+        finally:
+            deleted.unlink(missing_ok=True)
+
     def test_sheet_rename_conflict_uses_the_selected_name(self):
         rows = [[1, "a"], [2, "b"]]
         write_named_grid(self.base, "BaseName", rows)
@@ -1278,6 +1451,24 @@ class AutoTheirsFilterTests(unittest.TestCase):
             self.assertEqual(workbook["Data"]["A1"].value, "ours")
         finally:
             workbook.close()
+
+    def test_batch_preflight_failure_does_not_write_earlier_auto_table(self):
+        self.add_filter()
+        self.make_conflicts("locale/Key.xlsx", "Other.xlsx")
+        manifest_path = prepare_conflicts(self.repo, runtime_dir=self.runtime())
+        manifest = load_manifest(manifest_path)
+        manual_snapshot = Path(manifest["files"][0]["valueSnapshots"]["ours"]["valuePath"])
+        before_auto = (self.repo / "locale" / "Key.xlsx").read_bytes()
+        before_manual = (self.repo / "Other.xlsx").read_bytes()
+        before_index = git(self.repo, "ls-files", "--stage").stdout
+        manual_snapshot.write_bytes(manual_snapshot.read_bytes() + b"tampered")
+        decisions = {"files": {"Other.xlsx": {"sheets": {"Data": {"cells": {"A1": "ours"}}}}}}
+        with self.assertRaises(ConflictError):
+            apply_manifest(manifest_path, decisions, commit=False)
+        self.assertEqual((self.repo / "locale" / "Key.xlsx").read_bytes(), before_auto)
+        self.assertEqual((self.repo / "Other.xlsx").read_bytes(), before_manual)
+        self.assertEqual(git(self.repo, "ls-files", "--stage").stdout, before_index)
+        self.assertTrue(git(self.repo, "ls-files", "-u").stdout.strip())
 
     def test_launch_commits_auto_table_without_starting_server(self):
         self.add_filter()

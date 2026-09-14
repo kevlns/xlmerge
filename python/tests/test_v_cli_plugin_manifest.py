@@ -114,10 +114,13 @@ class VCliPluginManifestTests(unittest.TestCase):
         self.assertTrue(agent_doc.read_text(encoding="utf-8").strip())
         # manifest is actually reachable at the pointer path
         self.assertTrue((PACKAGE_ROOT / package["vCli"]["manifest"]).is_file())
-        # environment variables must be the ones the Node shim actually reads
+        # Bootstrap variables are read by the Node shim; formula timeout is
+        # consumed by the bundled Python formula materializer.
         shim = (PACKAGE_ROOT / "bin" / "xlmerge.js").read_text(encoding="utf-8")
         for var in ("XLMERGE_PYTHON", "XLMERGE_VENV"):
             self.assertIn(var, shim)
+        formula_values = (PACKAGE_ROOT / "python" / "xlsx_resolver" / "formula_values.py").read_text(encoding="utf-8")
+        self.assertIn("XLMERGE_EXCEL_TIMEOUT_SECONDS", formula_values)
         # version is a publishable prerelease semver (exact bump is a release step)
         self.assertRegex(package["version"], r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
 
@@ -133,7 +136,10 @@ class VCliPluginManifestTests(unittest.TestCase):
 
         env_entries = manifest["environment"]
         self.assertEqual([sorted(entry.keys()) for entry in env_entries], [["description", "name"]] * len(env_entries))
-        self.assertEqual({entry["name"] for entry in env_entries}, {"XLMERGE_PYTHON", "XLMERGE_VENV"})
+        self.assertEqual(
+            {entry["name"] for entry in env_entries},
+            {"XLMERGE_PYTHON", "XLMERGE_VENV", "XLMERGE_EXCEL_TIMEOUT_SECONDS"},
+        )
         self.assertTrue(all(entry["description"] for entry in env_entries))
 
         agent = manifest["agent"]

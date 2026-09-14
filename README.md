@@ -19,10 +19,11 @@
 
 ## Why xlmerge?
 
-Git 对二进制 `.xlsx`/`.xlsm` 只会整文件冲突，无法像文本一样逐行合并。xlmerge 用**三方结构化差异引擎 + 本地可视化 UI**把这件事变得可控：自动提取 Git index 的 base/ours/theirs 三方版本，按 Sheet、逻辑行、逻辑列、Cell 四级计算差异，浏览器中逐 Cell 选择本地/远端版本，最终写回工作簿并生成结构化 commit。
+Git 对二进制 `.xlsx`/`.xlsm` 只会整文件冲突，无法像文本一样逐行合并。xlmerge 用**公式最终值快照 + 三方结构化差异引擎 + 本地可视化 UI**把这件事变得可控：自动提取 Git index 的 base/ours/theirs 三方版本，按 Sheet、逻辑行、逻辑列、Cell 四级计算差异，浏览器中逐 Cell 选择本地/远端版本，最终原子写回工作簿并生成结构化 commit。
 
 - **逻辑 ID 定位** - 冲突身份用逻辑 ID（非物理坐标），插行删行后选择不会漂移
-- **保真写回** - 保留公式（注入缓存值，`data_only` 读取正确）、样式、批注、合并单元格、冻结窗格、行高列宽
+- **公式感知** - 三方工作簿先各自完整计算；diff 使用最终值，受影响 Sheet 固化为静态值，未受影响 Sheet 保留原公式及缓存
+- **安全写回** - apply 校验三方来源、值快照与工作树指纹；批次替换失败自动回滚，并保留所选来源的样式、批注、合并单元格、冻结窗格、行高列宽
 - **VBA 安全** - `.xlsm` 全程 `keep_vba`，保存后逐字节校验 VBA/ActiveX 负载
 - **Luban 表头识别** - 自动识别 `##var` / `##type` / `##group`，注释列、占位列参与对齐
 - **可配置整表过滤** - 仓库可把生成表加入过滤列表；命中时直接采用 Git stage 3 的远端原始文件
@@ -39,7 +40,7 @@ npm install -g @kevlns/xlmerge
 npm install -g git+https://github.com/kevlns/xlmerge.git
 ```
 
-要求：Node.js >= 16，系统 Python >= 3.9。首次运行若缺少依赖，会在 `~/.xlmerge/venv` 自动创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。
+要求：Node.js >= 16，系统 Python >= 3.9。首次运行若缺少依赖，会在 `~/.xlmerge/venv` 自动创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。不含公式的工作簿保持跨平台；工作簿含公式时，安全的最终值快照需要 Windows 桌面版 Excel，缺失时会明确失败而不会采用旧缓存。
 
 ### Quick start
 
@@ -60,6 +61,7 @@ xlmerge --repo <仓库路径> launch
 |------|------|
 | `XLMERGE_PYTHON` | 指定解释器路径（如嵌入式 Python），跳过自动探测 |
 | `XLMERGE_VENV` | 覆盖默认 venv 目录 |
+| `XLMERGE_EXCEL_TIMEOUT_SECONDS` | 单个工作簿通过 Excel 隔离重算的硬超时，默认 120 秒 |
 
 ## Usage
 
@@ -116,8 +118,11 @@ decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:
 ## Development
 
 ```bash
-# 单元测试（覆盖引擎、解析器、过滤配置与大请求体全流程）
+# 单元测试（覆盖引擎、公式安全、原子写回、过滤配置与大请求体全流程）
 python -m unittest discover -s python/tests -v
+
+# 可选：调用本机 Excel 的真实公式重算回归（仅操作临时目录）
+$env:XLSX_EXCEL_E2E=1; python -m unittest discover -s python/tests -v
 
 # 校验 v-cli.plugin.json 与 CLI 解析器未漂移（命令/选项/副作用覆盖）
 npm run check:manifest
@@ -138,7 +143,7 @@ v-cli.plugin.json               # Agent 插件清单（命令/选项/副作用�
 python/
 ├── xlsx_merge_engine/          # 三方结构化差异引擎（可独立 CLI 调试）
 │   └── xlsx_git_merge_bridge.py
-├── xlsx_resolver/              # 冲突解析器（detect/prepare/launch/apply + bottle UI）
+├── xlsx_resolver/              # 冲突解析器、公式值快照与 bottle UI
 └── tests/                      # 引擎与解析器测试（不随 npm 包发布）
 ```
 
@@ -151,7 +156,7 @@ kevlns 工具家族共享同一套发布约定（tag 驱动、CI 护栏、MIT）
 | Package | Purpose | Status |
 | --- | --- | --- |
 | [`v-cli`](https://github.com/kevlns/v-cli) | 个人工具箱 CLI | v0.2.3 |
-| [`xlmerge`](https://github.com/kevlns/xlmerge) | Git 中 .xlsx/.xlsm 冲突可视化解决工具（本仓库） | v1.3.1 |
+| [`xlmerge`](https://github.com/kevlns/xlmerge) | Git 中 .xlsx/.xlsm 冲突可视化解决工具（本仓库） | v2.0.0 |
 | [`u-cli-mod`](https://github.com/kevlns/u-cli-mod) | Unity 精确版本路由 + CLI + pipeline 包（Windows-first） | v0.1.4 |
 
 ## Compatibility
@@ -160,6 +165,7 @@ kevlns 工具家族共享同一套发布约定（tag 驱动、CI 护栏、MIT）
 | --- | --- |
 | Node.js | `16` and later |
 | Python | `3.9` and later |
+| Excel formula calculation | Windows desktop Excel; formula-free workbooks remain cross-platform |
 
 ## Contributing
 

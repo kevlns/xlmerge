@@ -19,6 +19,7 @@ from typing import Any, Iterable
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils.datetime import to_excel
 
 # 兼容嵌入式 Python（._pth 忽略 PYTHONPATH）：包内自举，将包根加入 sys.path
 _PKG_ROOT = Path(__file__).resolve().parents[1]
@@ -281,6 +282,111 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     return str(value)
+
+
+def _sha256_path(path: Path | str) -> str:
+    """Return a content digest without loading large workbook into memory."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _workbook_has_formula(path: Path | str) -> bool:
+    workbook = load_workbook(path, data_only=False, keep_links=True, read_only=True)
+    try:
+        return any(
+            cell.data_type == "f"
+            for ws in workbook.worksheets
+            for row in ws.iter_rows()
+            for cell in row
+        )
+    finally:
+        workbook.close()
+
+
+def _validate_value_workbook(path: Path | str) -> None:
+    """Snapshots must be literal and must not contain calculation errors."""
+    workbook = load_workbook(path, data_only=False, keep_links=True, read_only=True)
+    try:
+        for ws in workbook.worksheets:
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.data_type == "f":
+                        raise ConflictError(
+                            f"Formula materialization produced a formula in {path} ({ws.title}!{cell.coordinate})."
+                        )
+                    if cell.data_type == "e":
+                        raise ConflictError(
+                            f"Formula materialization produced an Excel error in {path} ({ws.title}!{cell.coordinate})."
+                        )
+    finally:
+        workbook.close()
+
+
+def _materialize_value_snapshot(source_path: Path | str, output_path: Path | str | None) -> Path:
+    """Calculate one complete source workbook and return its literal snapshot.
+
+    The implementation lives in formula_values.py so Excel/LibreOffice policy is
+    kept in one place.  This wrapper intentionally validates its contract at the
+    boundary: a successful return that still contains formulas is unsafe.
+    """
+    source = Path(source_path).resolve()
+    if output_path is None:
+        output_path = source.with_name(f"{source.stem}.values{source.suffix}")
+    destination = Path(output_path).resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from formula_values import materialize_values
+    except ImportError as exc:
+        raise ConflictError("Formula materialization is unavailable; refusing to compare formula workbooks.") from exc
+    try:
+        result = materialize_values(source, destination)
+    except Exception as exc:
+        raise ConflictError(f"Failed to calculate workbook {source}: {exc}") from exc
+    value_path = Path(result) if result is not None else destination
+    if not value_path.is_absolute():
+        value_path = (destination.parent / value_path).resolve()
+    if not value_path.exists():
+        raise ConflictError(f"Formula materialization did not produce a workbook for {source}.")
+    _validate_value_workbook(value_path)
+    return value_path
+
+
+def _snapshot_workbooks(
+    base_path: Path | str | None,
+    ours_path: Path | str,
+    theirs_path: Path | str,
+    analysis_dir: Path,
+) -> tuple[dict[str, Path | None], dict[str, dict[str, Any]]]:
+    """Create and describe immutable value snapshots for all three sides."""
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    sources = {"base": Path(base_path).resolve() if base_path else None,
+               "ours": Path(ours_path).resolve(), "theirs": Path(theirs_path).resolve()}
+    snapshots: dict[str, Path | None] = {}
+    metadata: dict[str, dict[str, Any]] = {}
+    for side, source in sources.items():
+        if source is None:
+            snapshots[side] = None
+            continue
+        source_hash = _sha256_path(source)
+        # No-formula workbooks are already valid value snapshots.  Avoid a
+        # needless package rewrite (and preserve exact zip bytes for safety).
+        if _workbook_has_formula(source):
+            output = analysis_dir / f"{side}.values{source.suffix.lower()}"
+            value_path = _materialize_value_snapshot(source, output)
+        else:
+            value_path = source
+            _validate_value_workbook(value_path)
+        snapshots[side] = value_path
+        metadata[side] = {
+            "sourcePath": str(source),
+            "sourceSha256": source_hash,
+            "valuePath": str(value_path),
+            "valueSha256": _sha256_path(value_path),
+        }
+    return snapshots, metadata
 
 
 def _cell_token(cell, cached_cell=None) -> tuple[Any, str] | None:
@@ -704,17 +810,21 @@ def diff_workbooks(
     analysis_dir: Path | str | None = None,
     skip_hidden_sheets: bool = True,
 ) -> dict[str, Any]:
-    wb_base = load_workbook(base_path, data_only=False, keep_links=True) if base_path else None
-    wb_ours = load_workbook(ours_path, data_only=False, keep_links=True)
-    wb_theirs = load_workbook(theirs_path, data_only=False, keep_links=True)
-    wb_base_v = load_workbook(base_path, data_only=True, keep_links=True) if base_path else None
-    wb_ours_v = load_workbook(ours_path, data_only=True, keep_links=True)
-    wb_theirs_v = load_workbook(theirs_path, data_only=True, keep_links=True)
+    structural_dir = Path(analysis_dir) if analysis_dir else Path(tempfile.mkdtemp(prefix="xlsx-merge-analysis-"))
+    snapshot_paths, value_snapshots = _snapshot_workbooks(
+        base_path, ours_path, theirs_path, structural_dir,
+    )
+    # These workbooks are complete, calculated value snapshots.  Keeping the
+    # three sides separate is important for cross-sheet formulas: each side is
+    # calculated against its own original workbook before alignment/merge.
+    wb_base = load_workbook(snapshot_paths["base"], data_only=False, keep_links=True) if snapshot_paths["base"] else None
+    wb_ours = load_workbook(snapshot_paths["ours"], data_only=False, keep_links=True)
+    wb_theirs = load_workbook(snapshot_paths["theirs"], data_only=False, keep_links=True)
+    wb_base_v = wb_ours_v = wb_theirs_v = None
     try:
         if base_path is not None:
-            structural_dir = Path(analysis_dir) if analysis_dir else Path(tempfile.mkdtemp(prefix="xlsx-merge-analysis-"))
             structural = analyze_structural_workbooks(
-                base_path, ours_path, theirs_path, structural_dir,
+                snapshot_paths["base"], snapshot_paths["ours"], snapshot_paths["theirs"], structural_dir,
                 write_sidecars=False, skip_hidden_sheets=skip_hidden_sheets,
             )
             sheets = []
@@ -758,6 +868,7 @@ def diff_workbooks(
                 })
             return {
                 "engineVersion": structural["version"],
+                "valueSnapshots": value_snapshots,
                 "sheets": sheets,
                 "summary": {
                     "sheetCount": len(sheets),
@@ -829,6 +940,7 @@ def diff_workbooks(
             })
 
         return {
+            "valueSnapshots": value_snapshots,
             "sheets": sheets,
             "summary": {
                 "sheetCount": len(sheets),
@@ -847,8 +959,10 @@ def diff_workbooks(
         wb_theirs.close()
         if wb_base_v is not None:
             wb_base_v.close()
-        wb_ours_v.close()
-        wb_theirs_v.close()
+        if wb_ours_v is not None:
+            wb_ours_v.close()
+        if wb_theirs_v is not None:
+            wb_theirs_v.close()
 
 
 def _author_and_date(repo: Path, relative_path: str, ref: str) -> tuple[str, str]:
@@ -927,6 +1041,8 @@ def prepare_conflicts(
                 "path": path,
                 "theirsAuthor": _theirs_author(repo_root, path),
                 "theirsDate": _theirs_date(repo_root, path),
+                "theirsSha256": hashlib.sha256(_git_blob(repo_root, 3, path)).hexdigest(),
+                "outputSha256": _sha256_path(repo_root / Path(path)) if (repo_root / Path(path)).exists() else None,
             })
             continue
         ours_blob = _git_blob(repo_root, 2, path)
@@ -957,6 +1073,7 @@ def prepare_conflicts(
             theirs_path,
             analysis_dir=work_dir / "analysis",
         )
+        value_snapshots = workbook_diff.get("valueSnapshots") or {}
         prepared_files.append({
             "id": path,
             "path": path,
@@ -969,11 +1086,15 @@ def prepare_conflicts(
             "oursDate": _ours_date(repo_root, path),
             "theirsDate": _theirs_date(repo_root, path),
             "macro": macro,
+            # Keep both source and value digests in the manifest.  apply must
+            # reuse exactly what the user saw, never silently recalculate.
+            "valueSnapshots": value_snapshots,
+            "outputSha256": _sha256_path(repo_root / Path(path)) if (repo_root / Path(path)).exists() else None,
             "diff": workbook_diff,
         })
 
     manifest = {
-        "version": 3,
+        "version": 4,
         "repoRoot": str(repo_root),
         "files": prepared_files,
         "autoTheirs": auto_entries,
@@ -993,13 +1114,33 @@ def prepare_conflicts(
 def load_manifest(path: Path | str) -> dict[str, Any]:
     manifest_path = Path(path).resolve()
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if data.get("version") != 3 or not isinstance(data.get("files"), list):
+    if data.get("version") != 4 or not isinstance(data.get("files"), list):
+        if data.get("version") == 3:
+            raise ConflictError(
+                f"Manifest {manifest_path} was created by the pre-materialization resolver; "
+                "re-run prepare so formula values can be calculated safely."
+            )
         raise ConflictError(f"Unsupported manifest: {manifest_path}")
+    for entry in data["files"]:
+        if not isinstance(entry.get("valueSnapshots"), dict):
+            raise ConflictError(f"Manifest {manifest_path} has no immutable formula value snapshots.")
     return data
 
 
 def _copy_cell(source, target) -> None:
-    target.value = source.value
+    if getattr(source, "data_type", None) == "s" and source.value == "":
+        # Formula snapshots may legitimately contain an empty-string result.
+        # Copy the typed rich-text payload so openpyxl does not serialize it as
+        # an absent cell (None) on the next save.
+        target.data_type = "s"
+        target._value = copy(getattr(source, "_value", ""))
+    else:
+        target.value = source.value
+    # openpyxl infers a string beginning with '=' as a formula.  Snapshot
+    # cells are literals, so restore the source type after assigning value;
+    # otherwise a calculated string could become executable formula syntax.
+    if getattr(source, "data_type", None) not in (None, "f"):
+        target.data_type = source.data_type
     if source.has_style:
         if source.parent is not None and source.parent.parent is target.parent.parent:
             # 同 workbook：样式表索引通用，浅拷贝 StyleArray 避免对象复制（大表 40 万+ 格）
@@ -1190,64 +1331,90 @@ _FORMULA_CACHE_NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}
 _FORMULA_CACHE_RNS = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
 
 
-def _inject_formula_cache(temp_path: Path, cache: dict[str, dict[str, Any]]) -> None:
-    """后处理 xlsx XML，为公式 cell 注入缓存值，使 data_only 读取得到正确值。"""
-    if not cache:
-        return
+
+
+def _restore_untouched_formula_caches(source: Path, target: Path, sheet_names: set[str]) -> None:
+    """Copy raw cache types/values, avoiding date-epoch and empty/error coercion."""
     import xml.etree.ElementTree as ET
-    ET.register_namespace('', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main')
-    with zipfile.ZipFile(temp_path) as zin:
-        infos = zin.infolist()
-        parts = {info.filename: zin.read(info.filename) for info in infos}
-    wb_tree = ET.fromstring(parts['xl/workbook.xml'])
-    rels_tree = ET.fromstring(parts['xl/_rels/workbook.xml.rels'])
-    rels = {rel.get('Id'): rel.get('Target') for rel in rels_tree}
-    sheet_to_file = {}
-    for sheet in wb_tree.iter(f'{_FORMULA_CACHE_NS}sheet'):
-        name = sheet.get('name')
-        rel_id = sheet.get(f'{_FORMULA_CACHE_RNS}id')
-        target = rels.get(rel_id, '')
-        if target:
-            sheet_to_file[name] = target.lstrip('/') if target.startswith('/') else 'xl/' + target
-    for sheet_name, coord_cache in cache.items():
-        xml_path = sheet_to_file.get(sheet_name)
-        if not xml_path or xml_path not in parts:
+
+    def sheet_files(parts):
+        relationships = ET.fromstring(parts['xl/_rels/workbook.xml.rels'])
+        targets = {rel.get('Id'): rel.get('Target') for rel in relationships}
+        result = {}
+        for sheet in ET.fromstring(parts['xl/workbook.xml']).iter(f'{_FORMULA_CACHE_NS}sheet'):
+            value = targets.get(sheet.get(f'{_FORMULA_CACHE_RNS}id'), '')
+            if value:
+                result[sheet.get('name')] = value.lstrip('/') if value.startswith('/') else 'xl/' + value
+        return result
+
+    with zipfile.ZipFile(source) as archive:
+        original = {item.filename: archive.read(item.filename) for item in archive.infolist()}
+    with zipfile.ZipFile(target) as archive:
+        infos = archive.infolist()
+        parts = {item.filename: archive.read(item.filename) for item in infos}
+    original_files, output_files = sheet_files(original), sheet_files(parts)
+    for name in sheet_names:
+        if name not in original_files or name not in output_files:
             continue
-        tree = ET.fromstring(parts[xml_path])
+        original_tree = ET.fromstring(original[original_files[name]])
+        caches = {cell.get('r'): cell for cell in original_tree.iter(f'{_FORMULA_CACHE_NS}c')
+                  if cell.find(f'{_FORMULA_CACHE_NS}f') is not None}
+        if not caches:
+            continue
+        output_tree = ET.fromstring(parts[output_files[name]])
+        for cell in output_tree.iter(f'{_FORMULA_CACHE_NS}c'):
+            old = caches.get(cell.get('r'))
+            if old is None or cell.find(f'{_FORMULA_CACHE_NS}f') is None:
+                continue
+            cell.attrib.pop('t', None)
+            if 't' in old.attrib:
+                cell.set('t', old.get('t'))
+            for value in list(cell.findall(f'{_FORMULA_CACHE_NS}v')):
+                cell.remove(value)
+            old_value = old.find(f'{_FORMULA_CACHE_NS}v')
+            if old_value is not None:
+                cell.append(copy(old_value))
+        parts[output_files[name]] = ET.tostring(output_tree, encoding='utf-8')
+    with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for info in infos:
+            archive.writestr(info, parts[info.filename])
+
+
+def _preserve_empty_inline_strings(path: Path) -> None:
+    """Make zero-length literal strings round-trip as ``''`` rather than None."""
+    import xml.etree.ElementTree as ET
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    ET.register_namespace("", namespace)
+    with zipfile.ZipFile(path) as source:
+        infos = source.infolist()
+        parts = {info.filename: source.read(info.filename) for info in infos}
+    changed = False
+    for name, payload in list(parts.items()):
+        if not name.startswith("xl/worksheets/") or not name.endswith(".xml"):
+            continue
+        tree = ET.fromstring(payload)
         modified = False
-        for c in tree.iter(f'{_FORMULA_CACHE_NS}c'):
-            coord = c.get('r')
-            if coord not in coord_cache:
+        for cell in tree.iter(f"{{{namespace}}}c"):
+            if cell.get("t") != "inlineStr" or cell.find(f"{{{namespace}}}is") is not None:
                 continue
-            if c.find(f'{_FORMULA_CACHE_NS}f') is None:
-                continue
-            cached = coord_cache[coord]
-            if cached is None:
-                continue
-            v_elem = c.find(f'{_FORMULA_CACHE_NS}v')
-            if v_elem is None:
-                v_elem = ET.SubElement(c, f'{_FORMULA_CACHE_NS}v')
-            if isinstance(cached, bool):
-                c.set('t', 'b')
-                v_elem.text = '1' if cached else '0'
-            elif isinstance(cached, str):
-                c.set('t', 'str')
-                v_elem.text = cached
-            else:
-                v_elem.text = str(cached)
+            inline = ET.SubElement(cell, f"{{{namespace}}}is")
+            ET.SubElement(inline, f"{{{namespace}}}t").text = ""
             modified = True
         if modified:
-            xml_bytes = ET.tostring(tree, encoding='UTF-8')
-            if xml_bytes.startswith(b"<?xml"):
-                xml_bytes = xml_bytes.replace(b"encoding='UTF-8'", b'encoding="UTF-8"')
-                if b'standalone' not in xml_bytes:
-                    xml_bytes = xml_bytes.replace(b'?>', b' standalone="yes"?>', 1)
-            else:
-                xml_bytes = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml_bytes
-            parts[xml_path] = xml_bytes
-    with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
-        for info in infos:
-            zout.writestr(info, parts[info.filename])
+            parts[name] = ET.tostring(tree, encoding="UTF-8")
+            changed = True
+    if not changed:
+        return
+    replacement = path.with_name(f".{path.name}.empty-strings")
+    try:
+        with zipfile.ZipFile(replacement, "w", zipfile.ZIP_DEFLATED) as output:
+            for info in infos:
+                output.writestr(info, parts[info.filename])
+        os.replace(replacement, path)
+    finally:
+        replacement.unlink(missing_ok=True)
+
+
 
 
 def _rebuild_structural_sheet(wb_out, wb_base, wb_ours, wb_theirs, sheet, selection,
@@ -1370,24 +1537,78 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
     file_choice = _file_decisions(decisions, file_entry["id"])
     macro = file_entry.get("macro") or {}
     macro_choice = file_choice.get("macro", macro.get("default", "ours"))
+    snapshot_meta = file_entry.get("valueSnapshots") or (file_entry.get("diff") or {}).get("valueSnapshots") or {}
+    if not snapshot_meta:
+        # Direct callers from older integrations may still build a workbook
+        # without a manifest.  Permit that only when there are no formulas;
+        # a formula-bearing old input must never fall back to stale caches.
+        if any(_workbook_has_formula(file_entry[side]) for side in ("base", "ours", "theirs") if file_entry.get(side)):
+            raise ConflictError(
+                f"{file_entry['path']} has formulas but no immutable value snapshot; re-run prepare."
+            )
+        snapshot_meta = {
+            side: {"valuePath": file_entry.get(side)}
+            for side in ("base", "ours", "theirs") if file_entry.get(side)
+        }
+    value_paths: dict[str, Path | None] = {}
+    for side in ("base", "ours", "theirs"):
+        meta = snapshot_meta.get(side) or {}
+        path = meta.get("valuePath")
+        if path is None:
+            value_paths[side] = None
+            continue
+        value_path = Path(path).resolve()
+        if not value_path.exists():
+            raise ConflictError(f"Missing immutable {side} value snapshot for {file_entry['path']}: {value_path}")
+        expected = meta.get("valueSha256")
+        if expected and _sha256_path(value_path) != expected:
+            raise ConflictError(f"Immutable {side} value snapshot changed for {file_entry['path']}; refusing apply.")
+        _validate_value_workbook(value_path)
+        value_paths[side] = value_path
     fd, temp_name = tempfile.mkstemp(prefix=f".{output.stem}-", suffix=extension, dir=output.parent)
     os.close(fd)
     temp_path = Path(temp_name)
     wb_out = load_workbook(file_entry["ours"], data_only=False, keep_links=True, keep_vba=keep_vba)
-    wb_base = load_workbook(file_entry["base"], data_only=False, keep_links=True) if file_entry.get("base") else None
-    wb_ours = wb_out  # 只读复用，使 _copy_cell 同 workbook 样式索引快路径生效
-    wb_theirs = load_workbook(file_entry["theirs"], data_only=False, keep_links=True)
-    wb_base_v = load_workbook(file_entry["base"], data_only=True, keep_links=True) if file_entry.get("base") else None
-    wb_ours_v = load_workbook(file_entry["ours"], data_only=True, keep_links=True)
-    wb_theirs_v = load_workbook(file_entry["theirs"], data_only=True, keep_links=True)
+    # Original ours is the package/style/macro base.  All sources used to
+    # rebuild an affected Sheet are the calculated literal snapshots.
+    wb_base = load_workbook(value_paths["base"], data_only=False, keep_links=True, keep_vba=keep_vba) if value_paths["base"] else None
+    wb_ours = load_workbook(value_paths["ours"], data_only=False, keep_links=True, keep_vba=keep_vba)
+    wb_theirs = load_workbook(value_paths["theirs"], data_only=False, keep_links=True, keep_vba=keep_vba)
+    wb_base_v = wb_ours_v = wb_theirs_v = None
     sheet_choices = file_choice.get("sheets") or {}
     formula_cache: dict[str, dict[str, Any]] = {}
+    affected_sheet_names: set[str] = set()
+    affected_output_sheet_names: set[str] = set()
+    output_sheet_names: set[str] = set()
     try:
         theirs_order = wb_theirs.sheetnames
         for sheet in file_entry["diff"]["sheets"]:
             name = sheet["name"]
             action = sheet["action"]
             selection = sheet_choices.get(name) or {}
+            original_name = (sheet.get("names") or {}).get("ours") or name
+            is_affected = (
+                action.startswith("conflict_")
+                or action in ("auto_add_ours", "auto_add_theirs")
+                or (
+                    action == "merge"
+                    and (
+                        sheet.get("rebuildRequired", True)
+                        or sheet.get("renameStatus") != "unchanged"
+                        or (sheet.get("mergedCells") or {}).get("status") != "same"
+                    )
+                )
+            )
+            if is_affected:
+                affected_sheet_names.add(original_name)
+                if action == "merge":
+                    affected_output_sheet_names.add(_selected_sheet_name(sheet, selection))
+                elif action.startswith("conflict_"):
+                    affected_output_sheet_names.add((sheet.get("names") or {}).get(selection.get("sheet")) or name)
+                elif action == "auto_add_ours":
+                    affected_output_sheet_names.add((sheet.get("names") or {}).get("ours") or name)
+                elif action == "auto_add_theirs":
+                    affected_output_sheet_names.add((sheet.get("names") or {}).get("theirs") or name)
             if action == "auto_delete":
                 if name in wb_out.sheetnames:
                     wb_out.remove(wb_out[name])
@@ -1400,24 +1621,54 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
                 if theirs_name not in wb_out.sheetnames:
                     _copy_sheet(wb_theirs[theirs_name], wb_out, index=min(theirs_order.index(theirs_name), len(wb_out.sheetnames)))
                 continue
+            if action == "auto_add_ours":
+                ours_name = (sheet.get("names") or {}).get("ours") or name
+                if ours_name in wb_out.sheetnames:
+                    wb_out.remove(wb_out[ours_name])
+                if ours_name in wb_ours.sheetnames:
+                    _copy_sheet(
+                        wb_ours[ours_name], wb_out,
+                        index=min(wb_ours.sheetnames.index(ours_name), len(wb_out.sheetnames)),
+                    )
+                continue
             if action.startswith("conflict_"):
                 side = selection["sheet"]
                 if side == "ours":
-                    continue
-                if name in wb_theirs.sheetnames:
-                    _replace_sheet(wb_out, wb_theirs[name], theirs_order)
+                    source_wb = wb_ours
+                else:
+                    source_wb = wb_theirs
+                source_name = (sheet.get("names") or {}).get(side) or name
+                if source_name in source_wb.sheetnames:
+                    _replace_sheet(wb_out, source_wb[source_name], source_wb.sheetnames)
                 elif name in wb_out.sheetnames:
                     wb_out.remove(wb_out[name])
                 continue
             if action != "merge":
                 continue
+            if not is_affected:
+                # Formula text may differ while final values are equal.  This
+                # is intentionally an untouched Sheet: preserve ours exactly.
+                continue
             if not sheet.get("rebuildRequired", True):
                 existing_name = (sheet.get("names") or {}).get("ours") or name
                 final_name = _selected_sheet_name(sheet, selection)
-                if existing_name in wb_out.sheetnames and final_name != existing_name:
-                    if final_name in wb_out.sheetnames:
-                        raise ConflictError(f"Sheet name collision after merge: {final_name}")
-                    wb_out[existing_name].title = final_name
+                # A rename-only/metadata-only changed Sheet is still affected;
+                # replace it from the selected calculated value snapshot so no
+                # formula survives through this fast path.
+                source_side = selection.get("rename", "ours") if sheet.get("renameStatus") == "rename_conflict" else "ours"
+                source_name = (sheet.get("names") or {}).get(source_side) or existing_name
+                source_wb = wb_theirs if source_side == "theirs" else wb_ours
+                if source_name in source_wb.sheetnames:
+                    if existing_name in wb_out.sheetnames:
+                        old_index = wb_out.sheetnames.index(existing_name)
+                        wb_out.remove(wb_out[existing_name])
+                    else:
+                        old_index = len(wb_out.sheetnames)
+                    copied = _copy_sheet(source_wb[source_name], wb_out, index=old_index)
+                    if final_name != copied.title:
+                        if final_name in wb_out.sheetnames and wb_out[final_name] is not copied:
+                            raise ConflictError(f"Sheet name collision after merge: {final_name}")
+                        copied.title = final_name
                 continue
             if sheet.get("allRows") is not None and sheet.get("columns") is not None:
                 cache = _rebuild_structural_sheet(
@@ -1426,26 +1677,26 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
                 )
                 formula_cache.update(cache)
                 continue
+            # Legacy coordinate-only reports are now also sourced from the
+            # literal snapshot.  They should be rare (structural reports use
+            # _rebuild_structural_sheet), but must obey the same no-formula rule.
+            if name not in wb_ours.sheetnames:
+                raise ConflictError(f"Missing ours Sheet {name} in legacy merge report.")
+            # Start from the literal ours snapshot so unchanged formula cells
+            # on this affected Sheet cannot survive the legacy patch path.
+            _replace_sheet(wb_out, wb_ours[name], wb_ours.sheetnames)
             ws_out = wb_out[name]
             ws_theirs = wb_theirs[name]
-            ws_theirs_v = wb_theirs_v[name] if name in wb_theirs_v.sheetnames else None
             cell_choices = selection.get("cells") or {}
-            legacy_cache: dict[str, Any] = {}
             for cell in sheet["cells"]:
                 side = cell_choices.get(cell["coordinate"], cell["resolution"])
                 if side == "conflict":
                     side = cell_choices[cell["coordinate"]]
                 if side == "theirs":
-                    src = ws_theirs[cell["coordinate"]]
-                    _copy_cell(src, ws_out[cell["coordinate"]])
-                    if src.data_type == 'f' and ws_theirs_v is not None:
-                        cached = ws_theirs_v[cell["coordinate"]].value
-                        if cached is not None:
-                            legacy_cache[cell["coordinate"]] = cached
-            if legacy_cache:
-                formula_cache[name] = legacy_cache
+                    _copy_cell(ws_theirs[cell["coordinate"]], ws_out[cell["coordinate"]])
         if not wb_out.sheetnames:
             raise ConflictError(f"Cannot save a workbook with no sheets: {file_entry['path']}")
+        output_sheet_names = set(wb_out.sheetnames)
         wb_out.save(temp_path)
     except Exception:
         temp_path.unlink(missing_ok=True)
@@ -1460,24 +1711,40 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
         _close_workbook(wb_ours_v)
         _close_workbook(wb_theirs_v)
 
-    _inject_formula_cache(temp_path, formula_cache)
-    check_wb = load_workbook(temp_path, read_only=True, data_only=False)
-    check_wb.close()
-    if keep_vba:
-        macro_source = file_entry["theirs"] if macro_choice == "theirs" else file_entry["ours"]
-        if macro_choice == "theirs":
-            if not macro.get("canChooseTheirs", True):
-                temp_path.unlink(missing_ok=True)
-                raise ConflictError(
-                    f"Cannot safely preserve the REMOTE macro payload for {file_entry['path']} because its package structure differs."
-                )
-            _replace_macro_payload(temp_path, macro_source)
-        expected_hash, expected_entries = _macro_payload_digest(macro_source)
-        actual_hash, actual_entries = _macro_payload_digest(temp_path)
-        if actual_hash != expected_hash or actual_entries != expected_entries:
-            temp_path.unlink(missing_ok=True)
-            raise ConflictError(f"Macro payload changed while saving {file_entry['path']}; output was not written.")
-    return temp_path
+    try:
+        _restore_untouched_formula_caches(
+            Path(file_entry['ours']), temp_path, output_sheet_names - affected_sheet_names,
+        )
+        _preserve_empty_inline_strings(temp_path)
+        check_wb = load_workbook(temp_path, read_only=True, data_only=False)
+        try:
+            for ws in check_wb.worksheets:
+                if ws.title not in affected_output_sheet_names:
+                    continue
+                for row in ws.iter_rows():
+                    for cell in row:
+                        if cell.data_type == "f":
+                            raise ConflictError(
+                                f"Affected Sheet {ws.title} retained formula at {cell.coordinate}; output was not written."
+                            )
+        finally:
+            check_wb.close()
+        if keep_vba:
+            macro_source = file_entry["theirs"] if macro_choice == "theirs" else file_entry["ours"]
+            if macro_choice == "theirs":
+                if not macro.get("canChooseTheirs", True):
+                    raise ConflictError(
+                        f"Cannot safely preserve the REMOTE macro payload for {file_entry['path']} because its package structure differs."
+                    )
+                _replace_macro_payload(temp_path, macro_source)
+            expected_hash, expected_entries = _macro_payload_digest(macro_source)
+            actual_hash, actual_entries = _macro_payload_digest(temp_path)
+            if actual_hash != expected_hash or actual_entries != expected_entries:
+                raise ConflictError(f"Macro payload changed while saving {file_entry['path']}; output was not written.")
+        return temp_path
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
 
 
 def _git_step(repo: Path, args: list[str], label: str) -> dict[str, Any]:
@@ -1554,6 +1821,107 @@ def _message_value(value) -> str:
     return str(value)
 
 
+def _validate_manifest_sources(manifest: dict[str, Any], repo: Path) -> None:
+    """Preflight every input before preparing any output replacement.
+
+    This deliberately validates both extracted files and their current index
+    stages.  A user may keep the UI open while another process changes a
+    conflict, in which case applying the old choices would be data loss.
+    """
+    for entry in manifest.get("files") or []:
+        relative = entry["path"]
+        for side, stage in (("base", 1), ("ours", 2), ("theirs", 3)):
+            meta = (entry.get("valueSnapshots") or {}).get(side) or {}
+            source_path = entry.get(side)
+            if source_path is None:
+                if stage == 1 and _git_blob(repo, stage, relative) is None:
+                    continue
+                raise ConflictError(f"Manifest source missing for {relative} ({side}).")
+            source = Path(source_path).resolve()
+            if not source.exists():
+                raise ConflictError(f"Manifest source missing for {relative} ({side}): {source}")
+            expected_source = meta.get("sourceSha256")
+            actual_source = _sha256_path(source)
+            if expected_source and actual_source != expected_source:
+                raise ConflictError(f"Manifest source changed for {relative} ({side}); refusing apply.")
+            indexed = _git_blob(repo, stage, relative)
+            if indexed is None:
+                raise ConflictError(f"Git index stage {stage} changed or disappeared for {relative} ({side}).")
+            if expected_source and hashlib.sha256(indexed).hexdigest() != expected_source:
+                raise ConflictError(f"Git index source changed for {relative} ({side}); re-run prepare.")
+            value_path = meta.get("valuePath")
+            expected_value = meta.get("valueSha256")
+            if not value_path or not expected_value:
+                raise ConflictError(f"Manifest has no immutable value snapshot for {relative} ({side}).")
+            snapshot = Path(value_path).resolve()
+            if not snapshot.exists() or _sha256_path(snapshot) != expected_value:
+                raise ConflictError(f"Immutable value snapshot changed for {relative} ({side}); refusing apply.")
+            _validate_value_workbook(snapshot)
+        output = (repo / Path(relative)).resolve()
+        expected_output = entry.get("outputSha256")
+        if expected_output is None:
+            if output.exists():
+                raise ConflictError(f"Worktree output appeared after prepare for {relative}; refusing overwrite.")
+        elif not output.exists() or _sha256_path(output) != expected_output:
+            raise ConflictError(f"Worktree output changed for {relative}; re-run prepare before apply.")
+    for entry in manifest.get("autoTheirs") or []:
+        relative = entry["path"]
+        blob = _git_blob(repo, 3, relative)
+        if blob is None:
+            raise ConflictError(f"{relative} requires remote stage 3, but it is no longer available.")
+        expected = entry.get("theirsSha256")
+        if expected and hashlib.sha256(blob).hexdigest() != expected:
+            raise ConflictError(f"Remote source changed for automatic table {relative}; re-run prepare.")
+        output = (repo / Path(relative)).resolve()
+        expected_output = entry.get("outputSha256")
+        if expected_output is None:
+            if output.exists():
+                raise ConflictError(f"Worktree output appeared after prepare for {relative}; refusing overwrite.")
+        elif not output.exists() or _sha256_path(output) != expected_output:
+            raise ConflictError(f"Worktree output changed for {relative}; re-run prepare before apply.")
+
+
+def _replace_prepared_outputs(prepared: list[tuple[Path, Path]]) -> None:
+    """Replace only after all outputs exist; roll back earlier swaps on failure."""
+    backups: dict[Path, Path | None] = {}
+    replaced: list[Path] = []
+    retained: set[Path] = set()
+    try:
+        for output, _ in prepared:
+            if output.exists():
+                fd, backup_name = tempfile.mkstemp(prefix=f".{output.stem}-backup-", suffix=output.suffix, dir=output.parent)
+                os.close(fd)
+                backup = Path(backup_name)
+                backups[output] = backup
+                shutil.copy2(output, backup)
+            else:
+                backups[output] = None
+        try:
+            for output, temporary in prepared:
+                os.replace(temporary, output)
+                replaced.append(output)
+        except Exception as exc:
+            errors = []
+            for output in reversed(replaced):
+                backup = backups[output]
+                try:
+                    if backup is None:
+                        output.unlink(missing_ok=True)
+                    else:
+                        os.replace(backup, output)
+                except Exception as restore_error:
+                    if backup is not None:
+                        retained.add(backup)
+                    errors.append(f"{output}: {restore_error}; recovery copy: {backup}")
+            if errors:
+                raise ConflictError("Output replacement failed; recovery copies retained: " + "; ".join(errors)) from exc
+            raise ConflictError("Output replacement failed; earlier replacements rolled back; Git index unchanged.") from exc
+    finally:
+        for backup in backups.values():
+            if backup is not None and backup not in retained:
+                backup.unlink(missing_ok=True)
+
+
 def apply_manifest(
     manifest_path: Path | str,
     decisions: dict[str, Any],
@@ -1565,21 +1933,46 @@ def apply_manifest(
     manifest = load_manifest(manifest_path)
     _validate_decisions(manifest, decisions)
     repo = find_repo_root(manifest["repoRoot"])
+    # Validate every immutable source, calculated-value snapshot, and worktree
+    # output before creating any replacement. A failed preflight leaves both
+    # the worktree and Git index untouched.
+    _validate_manifest_sources(manifest, repo)
     auto_entries = manifest.get("autoTheirs") or []
     if not manifest["files"] and not auto_entries:
         raise ConflictError("Manifest has no conflicts to resolve.")
     prepared: list[tuple[Path, Path]] = []
+    manual_outputs: list[Path] = []
+    auto_outputs: list[Path] = []
     try:
         for file_entry in manifest["files"]:
             output = Path(file_entry["output"]).resolve()
             if os.path.commonpath([str(repo), str(output)]) != str(repo):
-                raise ConflictError(f"Output escapes meta repository: {output}")
+                raise ConflictError(f"Output escapes repository: {output}")
             prepared.append((output, _build_merged_file(file_entry, decisions)))
-        for output, temp_path in prepared:
-            os.replace(temp_path, output)
-        auto_outputs = _apply_auto_theirs(repo, auto_entries)
+            manual_outputs.append(output)
+        for entry in auto_entries:
+            output = (repo / entry["path"]).resolve()
+            if os.path.commonpath([str(repo), str(output)]) != str(repo):
+                raise ConflictError(f"Output escapes repository: {output}")
+            blob = _git_blob(repo, 3, entry["path"])
+            if blob is None or hashlib.sha256(blob).hexdigest() != entry.get("theirsSha256"):
+                raise ConflictError(f"Remote source changed for automatic table {entry['path']}.")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{output.stem}-", suffix=output.suffix, dir=output.parent
+            )
+            temporary = Path(temporary_name)
+            prepared.append((output, temporary))
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(blob)
+            auto_outputs.append(output)
 
-        outputs = [output for output, _ in prepared] + auto_outputs
+        # Builds may be expensive, so check the inputs once more immediately
+        # before the atomic batch replacement.
+        _validate_manifest_sources(manifest, repo)
+        _replace_prepared_outputs(prepared)
+
+        outputs = [output for output, _ in prepared]
         relative_paths = [str(output.relative_to(repo)).replace("\\", "/") for output in outputs]
         steps = [_git_step(repo, ["add", "--", *relative_paths], "git add")]
         success = steps[-1]["success"]
@@ -1592,7 +1985,7 @@ def apply_manifest(
             success = steps[-1]["success"]
         return {
             "success": success,
-            "merged": [str(output) for output, _ in prepared],
+            "merged": [str(output) for output in manual_outputs],
             "autoTheirs": [str(output.relative_to(repo)).replace("\\", "/") for output in auto_outputs],
             "steps": steps,
         }

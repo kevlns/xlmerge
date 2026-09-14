@@ -651,6 +651,30 @@ def _fast_row_side_alignment(
 def _row_side_alignment(
     base_rows: list[RowProjection], side_rows: list[RowProjection]
 ) -> tuple[dict[int, int], dict[int, list[int]]]:
+    # Constant columns (including padding, flags and repeated formula results)
+    # provide no evidence of row identity. Counting them as matches can make a
+    # deleted row plus an insertion score higher than the surviving record.
+    # Drop them only from the alignment projection; all_cells stays intact for
+    # the actual three-way comparison and output. If all columns are constant,
+    # retain the original sequence semantics for duplicate/empty rows.
+    combined = [*base_rows, *side_rows]
+    width = max((len(row.projection) for row in combined), default=0)
+    informative = [
+        column for column in range(width)
+        if len({
+            _line([row.projection[column] if column < len(row.projection) else None])
+            for row in combined
+        }) > 1
+    ]
+    if informative and len(informative) < width:
+        def project(rows):
+            return [RowProjection(
+                row.xlsx_row,
+                tuple(row.projection[column] if column < len(row.projection) else None
+                      for column in informative),
+                row.all_cells, row.empty,
+            ) for row in rows]
+        base_rows, side_rows = project(base_rows), project(side_rows)
     if len(base_rows) * len(side_rows) > _FAST_ALIGN_THRESHOLD:
         return _fast_row_side_alignment(base_rows, side_rows)
     base_count = len(base_rows)

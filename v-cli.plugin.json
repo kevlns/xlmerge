@@ -3,7 +3,7 @@
   "package": "@kevlns/xlmerge",
   "command": "xlmerge",
   "bin": "xlmerge",
-  "description": "Visual resolver for Git merge conflicts in .xlsx/.xlsm planning tables: three-way sheet/row/cell diff, local UI, write-back and commit.",
+  "description": "Formula-aware visual resolver for Git merge conflicts in .xlsx/.xlsm planning tables: three-way sheet/row/cell diff, local UI, atomic write-back and commit.",
   "platforms": ["darwin", "linux", "win32"],
   "runtime": {
     "node": ">=16",
@@ -18,6 +18,10 @@
     {
       "name": "XLMERGE_VENV",
       "description": "Directory for the on-demand user-level virtualenv (default: ~/.xlmerge/venv)."
+    },
+    {
+      "name": "XLMERGE_EXCEL_TIMEOUT_SECONDS",
+      "description": "Hard timeout for isolated Excel formula recalculation (default: 120 seconds per workbook)."
     }
   ],
   "agent": {
