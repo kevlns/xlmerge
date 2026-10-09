@@ -1,6 +1,6 @@
 {
   "name": "@kevlns/xlmerge",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Formula-aware visual resolver for unresolved Git merge conflicts in .xlsx/.xlsm workbooks: three-way sheet/row/cell diff, local UI, atomic write-back and commit.",
   "bin": {
     "xlmerge": "bin/xlmerge.js"

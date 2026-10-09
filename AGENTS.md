@@ -1,6 +1,6 @@
 # xlmerge Agent 使用规范
 
-> 当前版本：v2.0.0。三方工作簿会在结构对齐前分别计算并固化公式最终值；apply 对来源、快照和工作树做完整预检，并以可回滚批次执行写回。
+> 三方工作簿会在结构对齐前分别计算并固化公式最终值；apply 对来源、快照和工作树做完整预检，并以可回滚批次执行写回（版本以 package.json / npm 包为准）。
 
 > 本文件是 AI Agent 调用 xlmerge 的规范正本。完整参数以 `xlmerge --help` / 子命令 `--help` 与 `v-cli.plugin.json`（经 v-cli 路由时用 `v-cli agent describe xlmerge`）为准；本文件锁定使用场景、调用规范、快速流程与边界。
 
@@ -21,7 +21,7 @@ xlmerge --repo <repo> launch
 ## 使用规范（Agent 必须遵守）
 
 1. 用户确认要处理冲突后，**只做快速连贯的检测与启动**：`detect` → `count > 0` 时 `launch`。`reviewCount > 0` 时把返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择；`reviewCount == 0` 时 `launch` 会直接采用过滤项的远端版本并提交，报告其 JSON 结果；`count == 0` 时报告没有未解决冲突并结束。
-2. **不额外审查冲突情况**：不检查工作簿 Cell、不自行做三方 diff、不总结冲突内容、不读取 base/ours/theirs；这些复杂度由固化程序处理。
+2. **不额外审查冲突情况**：不检查工作簿 Cell、不自行做三方 diff、不总结冲突内容、不读取 base/ours/theirs；这些复杂度由工具内部流程处理。
 3. **不默认走无头自动合并**：`launch --no-browser` + 程序化 decisions/apply 的无头链路仅限自动化测试或用户明确提供决策 JSON / 明确要求自动化的场景；默认流程必须走 UI `launch`，决策权始终在用户。
 4. **不替用户选择 ours/theirs**；不因为冲突文件多、Sheet 多而进入计划模式。
 5. `apply` 默认写回并 `git commit`；`--no-commit` 仅测试决策时使用；`--push` 仅用户明确要求推送时使用，正常流程不自动 push。
@@ -29,7 +29,7 @@ xlmerge --repo <repo> launch
 
 ## 最高优先级快速流程
 
-这是一个命令路由 Skill，不是表格分析任务。用户确认要处理冲突后，只做以下动作：
+用户确认要处理冲突后，只做以下动作：
 
 1. 执行检测：
 
@@ -43,7 +43,7 @@ xlmerge --repo <repo> detect
 xlmerge --repo <repo> launch
 ```
 
-3. `reviewCount > 0` 时，把 `launch` 返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择。`launch` 已经负责提取全部 Git 三方版本、计算多文件多 Sheet diff、后台启动服务并打开浏览器。`reviewCount == 0` 时不会启动 UI，命令会写回所有过滤项、提交并返回 `autoResolved`。
+3. `reviewCount > 0` 时，把 `launch` 返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择。`launch` 负责提取全部 Git 三方版本、计算多文件多 Sheet diff、后台启动服务并打开浏览器。`reviewCount == 0` 时不会启动 UI，命令会写回所有过滤项、提交并返回 `autoResolved`。
 
 如果 `count` 为 `0`，报告没有未解决的 `.xlsx` / `.xlsm` 冲突并结束。
 
@@ -59,13 +59,13 @@ xlmerge --repo <repo> filter add locale/Key.xlsx
 
 命中过滤项的冲突文件不进入结构化分析或 UI，而是逐字节写入 Git index stage 3（theirs）。若 stage 3 不存在则安全失败；混合批次会在用户确认人工冲突后，与 UI 处理结果一起写回并提交。
 
-### 快速流程禁止事项
+## 快速流程禁止事项
 
 - 不调用通用 `xlsx` Skill、Excel API 或临时 Python 读取 base/ours/theirs。
 - 不运行 `prepare` 后读取 manifest，也不枚举或总结 Cell/Sheet 差异。
 - 不先搜索配置表结构、Luban schema、策划字段含义或项目代码。
 - 不替用户判断某个 Cell 应选 ours 还是 theirs。
-- 不因为冲突文件多、Sheet 多而进入计划模式；这些复杂度由固化程序处理。
+- 不因为冲突文件多、Sheet 多而进入计划模式；这些复杂度由工具内部流程处理。
 - 不使用阻塞式 `resolve` 作为正常入口；正常调用始终使用会快速返回 URL 的 `launch`。
 - 默认流程禁止按文件循环调用 `launch --path`；单个文件异常也必须由同一批次页面展示或明确报错。
 
@@ -108,7 +108,7 @@ git -C <repo> log -1 --oneline
 
 ## 非交互入口
 
-仅在自动化测试或用户已提供明确决策 JSON 时使用 prepare/apply；不要为了让模型查看 diff 而使用。决策必须同时包含文件、Sheet 和 Cell（Cell 优先使用 manifest 的稳定逻辑 ID）：
+仅在自动化测试或用户已提供明确决策 JSON 时使用 prepare/apply；不要用于查看 diff。决策必须同时包含文件、Sheet 和 Cell（Cell 优先使用 manifest 的稳定逻辑 ID）：
 
 ```bash
 xlmerge --repo <repo> prepare
@@ -125,13 +125,13 @@ xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.js
 - 写回前必须收齐所有人工选择；缺少任何选择时不改工作树。
 - prepare 生成的三方来源、最终值快照和当时工作树指纹会在 apply 前全部校验；快照篡改、Git stage 变化、公式计算失败、公式错误或不可靠公式语义都会明确中止，整批次不写回、不 `git add`。
 - 所有人工表和自动表先生成临时输出并通过预检，再统一替换；替换中途失败会回滚已替换文件，若文件系统同时阻止回滚则保留恢复副本并报告路径。
-- Excel 正在占用目标文件导致替换失败时，要求用户关闭该工作簿后重试。
+- 替换失败（如 Excel 正在占用目标文件，替换整体回滚）时，应要求用户关闭该工作簿后重试。
 - 不直接修改 XLSX 内部 XML，不使用未经本次完整计算验证的旧公式缓存冒充最终值。
 - 运行时提取文件和 manifest 默认放系统临时目录，不写入业务仓库。
 
 ## 环境
 
-npm 包通过 `bin/xlmerge.js` 启动：自动检测系统 Python（≥3.9，顺序为 `XLMERGE_PYTHON` 环境变量 > `python3` > `python` > `py -3`）；若缺 `openpyxl` / `bottle` 依赖，则在 `~/.xlmerge/venv` 创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。不含公式的工作簿保持跨平台；含公式时必须在 Windows 上安装桌面版 Excel，解析器只让 Excel 打开隔离的临时副本，并拒绝外链、UDF/VBA、volatile、循环引用、动态数组等不可安全复现的公式语义。`XLMERGE_EXCEL_TIMEOUT_SECONDS` 可覆盖每个工作簿默认 120 秒的重算硬超时。正常流程不检查环境；仅入口明确报环境错误时诊断。
+npm 包通过 `bin/xlmerge.js` 启动：自动检测系统 Python（≥3.9，`XLMERGE_PYTHON` 可直接指定；否则按平台探测 `python3` / `python`，Windows 追加 `py -3`）；若缺 `openpyxl` / `bottle` 依赖，则在 `~/.xlmerge/venv` 创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。不含公式的工作簿保持跨平台；含公式时必须在 Windows 上安装桌面版 Excel，解析器只让 Excel 打开隔离的临时副本，并拒绝外链、UDF/VBA、volatile、循环引用、动态数组等不可安全复现的公式语义。`XLMERGE_EXCEL_TIMEOUT_SECONDS` 可覆盖每个工作簿默认 120 秒的重算硬超时。正常流程不检查环境；仅入口明确报环境错误时诊断。
 
 ## 验证
 

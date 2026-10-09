@@ -4,7 +4,7 @@
 
 # xlmerge
 
-**解决 Git 仓库中 `.xlsx` / `.xlsm` 策划配置表未合并冲突（merge conflict）的可视化工具。**
+**解决 Git 仓库中 `.xlsx` / `.xlsm` 策划配置表未合并冲突的可视化工具。**
 
 [![npm version](https://img.shields.io/npm/v/%40kevlns%2Fxlmerge?style=flat-square&color=cb3837)](https://www.npmjs.com/package/@kevlns/xlmerge)
 [![npm downloads](https://img.shields.io/npm/dm/%40kevlns%2Fxlmerge?style=flat-square&color=4c8bf5)](https://www.npmjs.com/package/@kevlns/xlmerge)
@@ -78,9 +78,12 @@ xlmerge --repo <仓库路径> launch
 # 只处理单个文件
 xlmerge --repo <仓库路径> launch --path new_meta/Items.xlsx
 
+# 前台阻塞式运行（与 launch 等价，进程前台等待完成）
+xlmerge --repo <仓库路径> resolve
+
 # 非交互（自动化/CI）：先 prepare 再 apply
 xlmerge --repo <仓库路径> prepare
-xlmerge --repo <仓库路径> apply --manifest <manifest.json> --decisions <decisions.json> [--no-commit] [--push]
+xlmerge --repo <仓库路径> apply --manifest <manifest.json> --decisions <decisions.json> [--no-commit] [--message <text>] [--push]
 ```
 
 `--repo` 缺省为当前目录（向上查找 Git 根）。
@@ -147,17 +150,18 @@ python/
 └── tests/                      # 引擎与解析器测试（不随 npm 包发布）
 ```
 
-> 注：为兼容嵌入式 Python 发行版（`._pth` 忽略 `PYTHONPATH`），模块内使用包内自举的 `sys.path` 注入而非纯包导入；这是有意为之。
+> 注：为兼容嵌入式 Python 发行版（`._pth` 忽略 `PYTHONPATH`），模块内通过自举 `sys.path` 注入定位依赖，勿改为纯包导入。
 
 ## Package family
 
 kevlns 工具家族共享同一套发布约定（tag 驱动、CI 护栏、MIT）。
 
-| Package | Purpose | Status |
+| Package | Purpose | Version |
 | --- | --- | --- |
-| [`v-cli`](https://github.com/kevlns/v-cli) | 个人工具箱 CLI | v0.2.3 |
+| [`v-cli`](https://github.com/kevlns/v-cli) | 个人工具箱 CLI | v0.2.14 |
 | [`xlmerge`](https://github.com/kevlns/xlmerge) | Git 中 .xlsx/.xlsm 冲突可视化解决工具（本仓库） | v2.0.0 |
-| [`u-cli-mod`](https://github.com/kevlns/u-cli-mod) | Unity 精确版本路由 + CLI + pipeline 包（Windows-first） | v0.1.4 |
+| [`u-cli-mod`](https://github.com/kevlns/u-cli-mod) | Unity 精确版本路由 + CLI + pipeline 包（Windows-first） | v0.2.3 |
+| [`figma-to-uprefab`](https://github.com/kevlns/figma-to-uprefab) | Figma 导出、契约校验与 Unity UGUI staging Prefab 构建 | v0.1.1 |
 
 ## Compatibility
 
