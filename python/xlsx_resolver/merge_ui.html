@@ -535,11 +535,12 @@ function sheetDecision(file, sheet) {
 }
 function cellKey(cell) { return cell.id || cell.coordinate; }
 function defaultCellChoice(cell) {
+  if (cell.requiresChoice) return null;
   if (cell.resolution === 'conflict') return 'theirs';
   if (cell.resolution === 'same') return cell.oursPresent === false ? 'theirs' : 'ours';
   return cell.resolution;
 }
-function defaultSheetChoice(sheet) { return sheet.action.startsWith('conflict_') ? 'ours' : null; }
+function defaultSheetChoice(sheet) { return sheet.action.startsWith('conflict_') && !sheet.requiresChoice ? 'ours' : null; }
 function initializeDecisions() {
   for (const file of model.files) {
     const fileTarget = fileDecision(file);
@@ -621,10 +622,10 @@ function renderSheetTabs() {
   const host = byId('sheetTabs');
   host.replaceChildren();
   const file = currentFileData();
-  // 只显示需要处理的 Sheet（needsAttention=false 的无冲突/无更改 Sheet 折叠）
+  // 单侧修改仍可人工覆盖，与双侧冲突使用相同的审阅入口。
   const visible = [];
   file.diff.sheets.forEach((sheet, index) => {
-    if (sheet.needsAttention === false) return;
+    if (!sheetNeedsConfirmation(sheet)) return;
     visible.push({ sheet, index });
   });
   if (!visible.length) {
@@ -635,7 +636,7 @@ function renderSheetTabs() {
     return;
   }
   const current = file.diff.sheets[currentSheet];
-  if (!current || current.needsAttention === false) {
+  if (!sheetNeedsConfirmation(current)) {
     currentSheet = visible[0].index;
   }
   visible.forEach(({ sheet, index }) => {
@@ -649,11 +650,24 @@ function renderSheetTabs() {
     confirmation.type = 'checkbox';
     confirmation.className = 'sheet-confirm-checkbox';
     confirmation.checked = target.confirmed === true;
-    confirmation.title = '勾选表示你已人工审阅并确认本 Sheet 的所有冲突；取消勾选可继续编辑。';
+    confirmation.title = '勾选表示你已人工审阅并确认本 Sheet 的所有待处理项（含单侧改动）；取消勾选可继续编辑。';
     confirmation.setAttribute('aria-label', `${sheet.name}：已确认（人工审阅完成）`);
     confirmation.onclick = event => event.stopPropagation();
     confirmation.onchange = event => {
       event.stopPropagation();
+      if (confirmation.checked && ((sheet.requiresChoice && !target.sheet) ||
+          (!target.sheet && (sheet.cells || []).some(cell => cell.requiresChoice && !target.cells[cellKey(cell)])))) {
+        confirmation.checked = false;
+        byId('footerStatus').textContent = '公式无法计算：请先明确选择这些单元格或整个 Sheet 的来源。';
+        return;
+      }
+      const invalid = !target.sheet && (sheet.cells || []).find(cell => (cell.errorSides || {})[target.cells[cellKey(cell)]]);
+      const sheetError = selectedSourceErrors(sheet, target).find(error => !validRepair(error, ((target.repairs || {})[target.sheet] || {})[error.coordinate]));
+      if (confirmation.checked && (invalid || sheetError)) {
+        confirmation.checked = false;
+        byId('footerStatus').textContent = '请先填写所选整表来源的合法修复值，再确认 Sheet。';
+        return;
+      }
       target.confirmed = confirmation.checked;
       render();
     };
@@ -693,6 +707,32 @@ function renderSheetChoice() {
     }
   }
   if (!sheet) return;
+  if (sheet.replacements && sheet.replacements.length) {
+    const note = document.createElement('span'); note.className = 'macro-label';
+    const count = new Set(sheet.replacements.map(repair => JSON.stringify([repair.recordId, repair.field]))).size;
+    note.textContent = sheet.replacements.some(repair => repair.manual)
+      ? '公式错误已按人工指定值修复，请确认整表来源。'
+      : `双方错误已按字段类型替换 ${count} 个值（ID、引用和未知类型保留人工处理）。`;
+    note.title = sheet.replacements.map(repair => `${repair.side} / ${repair.coordinate}: ${repair.formula} → ${JSON.stringify(repair.value)}`).join('\n');
+    host.append(note);
+  }
+  if (sheet.calculationErrors && sheet.calculationErrors.length) {
+    const note = document.createElement('span'); note.className = 'macro-label';
+    note.textContent = `有 ${sheet.calculationErrors.length} 个无法计算的值，必须选择有效来源。`;
+    note.title = sheet.calculationErrors.map(error => `${error.side} / ${error.sheet}!${error.coordinate}: ${error.formula} → ${error.error}`).join('\n');
+    host.append(note);
+    if (sheet.action === 'merge') {
+      for (const side of ['ours', 'theirs']) {
+        const button = document.createElement('button'); button.className = 'structure-toggle';
+        button.textContent = side === 'ours' ? '整表采用本地' : '整表采用远端';
+        button.disabled = currentSheetIsConfirmed(); button.onclick = () => chooseSheet(file, sheet, side); host.append(button);
+      }
+      if (sheetDecision(file, sheet).sheet) {
+        const button = document.createElement('button'); button.className = 'structure-toggle'; button.textContent = '返回单元格合并';
+        button.onclick = () => { delete sheetDecision(file, sheet).sheet; sheetDecision(file, sheet).confirmed = false; render(); }; host.append(button);
+      }
+    }
+  }
   const target = sheetDecision(file, sheet);
   const confirmed = sheetNeedsConfirmation(sheet) && target.confirmed;
   if (sheet.renameStatus === 'rename_conflict') {
@@ -738,7 +778,7 @@ function renderTable() {
     renderMessage(host, '无需处理', '两侧工作簿内容一致，没有需要展示的 Sheet 差异。');
     return;
   }
-  if (sheet.action.startsWith('conflict_')) {
+  if (sheet.action.startsWith('conflict_') || sheetDecision(file, sheet).sheet) {
     renderSheetConflict(host, file, sheet);
     renderConfirmedOverlay(host, file, sheet);
     return;
@@ -757,7 +797,12 @@ function renderTable() {
   renderConfirmedOverlay(host, file, sheet);
 }
 function sheetNeedsConfirmation(sheet) {
-  return !!sheet && sheet.needsAttention !== false;
+  return !!sheet && (sheet.needsAttention !== false || sheet.decisionCellCount > 0 ||
+    (sheet.cells || []).some(cell => cellNeedsReview(cell)));
+}
+function cellNeedsReview(cell) {
+  return !!cell && !cell.replacement && cell.selectable !== false &&
+    ['ours', 'theirs', 'conflict'].includes(cell.resolution);
 }
 function renderConfirmedOverlay(host, file, sheet) {
   if (!sheetNeedsConfirmation(sheet) || !sheetDecision(file, sheet).confirmed) return;
@@ -791,9 +836,9 @@ function renderActionAvailability() {
 function navigableConflictCells(file, sheet) {
   if (!sheet || !sheetNeedsConfirmation(sheet)) return [];
   if (sheet.columns && sheet.allRows) {
-    return (sheet.cells || []).filter(cell => cell.resolution === 'conflict' && structuralCellSelectable(file, sheet, cell));
+    return (sheet.cells || []).filter(cell => cellNeedsReview(cell) && structuralCellSelectable(file, sheet, cell));
   }
-  return (sheet.cells || []).filter(cell => cell.resolution === 'conflict');
+  return (sheet.cells || []).filter(cell => cellNeedsReview(cell));
 }
 function conflictCellKey(cell) { return cell && (cell.id || cell.coordinate); }
 function renderConflictNavigation() {
@@ -807,8 +852,8 @@ function renderConflictNavigation() {
   count.textContent = cells.length ? `${currentIndex < 0 ? 0 : currentIndex + 1} / ${cells.length}` : '0 / 0';
   previous.disabled = cells.length === 0;
   next.disabled = cells.length === 0;
-  previous.title = cells.length ? '定位到当前 Sheet 的上一个可处理冲突（循环）' : '当前 Sheet 没有可定位的冲突';
-  next.title = cells.length ? '定位到当前 Sheet 的下一个可处理冲突（循环）' : '当前 Sheet 没有可定位的冲突';
+  previous.title = cells.length ? '定位到当前 Sheet 的上一个待审阅改动（含单侧改动，循环）' : '当前 Sheet 没有可定位的改动';
+  next.title = cells.length ? '定位到当前 Sheet 的下一个待审阅改动（含单侧改动，循环）' : '当前 Sheet 没有可定位的改动';
 }
 function markConflictCell(cellElement) {
   if (!cellElement) return;
@@ -863,6 +908,14 @@ function renderSheetConflict(host, file, sheet) {
   const heading = document.createElement('h2'); heading.textContent = `${sheet.name}：删除 / 修改冲突`;
   const body = document.createElement('p');
   body.textContent = '一侧删除了整个 Sheet，另一侧继续修改。选择某一侧后，将按该侧实际状态保留或删除 Sheet。';
+  if (sheet.action === 'conflict_calculation_errors' || (sheet.calculationErrors || []).length) {
+    heading.textContent = `${sheet.name}：公式错误`;
+    body.textContent = '存在无法计算的值，且无法可靠对应行列或确认记录身份。请明确选择整个 Sheet 的有效本地或远端版本。';
+    if (!(sheet.calculationErrors || []).length) {
+      heading.textContent = `${sheet.name}：修复后整表选择`;
+      body.textContent = '公式错误已修复。选择整表来源后，勾选 Sheet 标签前的确认框完成审阅。';
+    }
+  }
   const target = sheetDecision(file, sheet);
   const names = sheet.names || {};
   const local = document.createElement('button');
@@ -874,6 +927,47 @@ function renderSheetConflict(host, file, sheet) {
   remote.className = 'btn btn-remote'; remote.textContent = target.sheet === 'theirs' ? `✓ ${remoteLabel}` : remoteLabel;
   remote.onclick = () => chooseSheet(file, sheet, 'theirs');
   box.append(heading, body, local, document.createTextNode('  '), remote); host.append(box);
+  const errors = selectedSourceErrors(sheet, target);
+  if (errors.length) {
+    const label = document.createElement('p'); label.textContent = '修复所选来源的错误值后，再确认整张 Sheet。ID / 引用字段需人工核对。'; box.append(label);
+    const values = ((target.repairs || {})[target.sheet] || {});
+    for (const error of errors) {
+      const row = document.createElement('div'); row.style.margin = '12px 0';
+      const title = document.createElement('label'); title.textContent = `${error.coordinate} · ${error.field || '字段未识别'} · ${error.type || '未知类型'}：`;
+      title.title = `${error.formula} → ${error.error}`;
+      const input = document.createElement(error.type === 'bool' ? 'select' : 'input');
+      input.setAttribute('aria-label', `${error.coordinate} 修复值`); input.disabled = currentSheetIsConfirmed();
+      if (error.type === 'bool') {
+        for (const text of ['', 'true', 'false']) {const option = document.createElement('option'); option.value = text; option.textContent = text || '请选择'; input.append(option);}
+      } else {input.type = 'text'; input.placeholder = error.type === 'string' ? '请输入文本（可为空串）' : '请输入合法数值';}
+      if (Object.hasOwn(values, error.coordinate)) input.value = String(values[error.coordinate]);
+      input.onchange = () => {
+        target.repairs ||= {}; target.repairs[target.sheet] ||= {};
+        const value = error.type === 'string' ? input.value : error.type === 'bool' ? (input.value ? input.value === 'true' : undefined) : (input.value.trim() ? Number(input.value) : undefined);
+        if (validRepair(error, value)) target.repairs[target.sheet][error.coordinate] = value;
+        else delete target.repairs[target.sheet][error.coordinate];
+        target.confirmed = false; renderSheetTabs(); updateStats();
+      };
+      title.append(input); row.append(title);
+      if (Object.hasOwn(error, 'defaultValue')) {
+        const button = document.createElement('button'); button.className = 'btn'; button.textContent = `使用类型默认值 ${JSON.stringify(error.defaultValue)}`;
+        button.onclick = () => {target.repairs ||= {}; target.repairs[target.sheet] ||= {}; target.repairs[target.sheet][error.coordinate] = error.defaultValue; target.confirmed = false; render();}; row.append(button);
+      }
+      box.append(row);
+    }
+  }
+}
+function selectedSourceErrors(sheet, target) {return (sheet.calculationErrors || []).filter(error => error.side === target.sheet);}
+function validRepair(error, value) {
+  if (error.type === 'string') return typeof value === 'string';
+  if (error.type === 'bool') return typeof value === 'boolean';
+  if (['float', 'double', 'decimal'].includes(error.type)) return typeof value === 'number' && Number.isFinite(value);
+  const kind = error.type || '';
+  if (!/^(?:u?int(?:8|16|32|64)?|s?byte|u?short|u?long)$/.test(kind) || !Number.isSafeInteger(value)) return false;
+  const sizes = {byte:8,sbyte:8,short:16,ushort:16,long:64,ulong:64};
+  const bits = sizes[kind] || Number((kind.match(/\d+$/) || ['32'])[0]);
+  const unsigned = kind.startsWith('u') || kind === 'byte';
+  return value >= (unsigned ? 0 : -(2 ** (bits - 1))) && value <= 2 ** (unsigned ? bits : bits - 1) - 1;
 }
 function axisChoice(file, sheet, kind, axis) {
   if (axis.state !== 'delete_modify') return axis.default;
@@ -897,6 +991,7 @@ function structuralOutputMaps(file, sheet) {
   return {rows, columns};
 }
 function structuralCellSelectable(file, sheet, cell) {
+  if (cell.replacement) return false;
   if (!cell || !cell.changed || cell.selectable === false) return false;
   const row = (sheet.allRows || []).find(item => item.id === cell.rowId);
   const column = (sheet.columns || []).find(item => item.id === cell.colId);
@@ -1037,9 +1132,13 @@ function renderStructuralTable(host, file, sheet) {
       } else cell.className = 'cell-no-conflict' + (structurallyLocked ? ' cell-locked' : '');
       if (cellData) {
         cell.textContent = fmtVal(structuralCellValue(target, cellData));
+        if (cellData.requiresChoice && !target.cells[cellData.id]) {
+          cell.textContent = '待选择';
+          cell.className = 'cell-no-conflict cell-selectable';
+        }
         if (structuralCellSelectable(file, sheet, cellData)) {
           cell.onclick = () => cycleCell(file, sheet, cellData);
-          if (cellData.resolution === 'conflict') cell.dataset.conflictId = cellData.id;
+          if (cellNeedsReview(cellData)) cell.dataset.conflictId = cellData.id;
         }
         bindStructuralTip(cell, file, sheet, axisRow, column, cellData);
       }
@@ -1108,7 +1207,7 @@ function renderLegacyDiffTable(host, file, sheet) {
         cell.className = choice === 'ours' ? 'cell-local' : 'cell-remote';
         cell.textContent = fmtVal(choice === 'ours' ? changed.ours : changed.theirs);
         cell.onclick = () => cycleCell(file, sheet, changed);
-        if (changed.resolution === 'conflict') cell.dataset.conflictId = changed.id || changed.coordinate;
+        if (cellNeedsReview(changed)) cell.dataset.conflictId = changed.id || changed.coordinate;
       } else {
         cell.className = 'cell-no-conflict';
         cell.textContent = fmtVal(gridVal(sheet, rowNumber, col));
@@ -1171,10 +1270,22 @@ function showStructuralTip(event, file, sheet, row, column, cell) {
   const label = document.createElement('div'); label.className = 'label';
   label.textContent = `${file.path} / ${sheet.name} / ${row.id} / ${column.id}`; tip.append(label);
   addTipLine(tip, 'val-base', '基线', cell.base, '');
+  if (cell.calculationErrors) {
+    for (const [side, error] of Object.entries(cell.calculationErrors)) {
+      addTipLine(tip, 'label', `${side === 'base' ? '历史' : side === 'ours' ? '本地' : '远端'}值未知`, `${error.coordinate}: ${error.formula} → ${error.error}`, '');
+    }
+    if (!sheetDecision(file, sheet).cells[cellKey(cell)]) addTipLine(tip, 'label', '待选择', '请点击明确选择本地或远端；当前展示不代表已选择。', '');
+  }
+  if (cell.replacement) {
+    for (const [side, repair] of Object.entries(cell.replacement)) {
+      addTipLine(tip, 'label', side === 'ours' ? '本地原错误' : '远端原错误', `${repair.coordinate}: ${repair.formula} → ${repair.error}`, '');
+    }
+    addTipLine(tip, 'label', '按类型替换', JSON.stringify(cell.replacement.ours.value), '');
+  }
   addTipLine(tip, 'val-local', '本地', cell.ours, file.oursAuthor, file.oursDate);
   addTipLine(tip, 'val-remote', '远端', cell.theirs, file.theirsAuthor, file.theirsDate);
   const choice = sheetDecision(file, sheet).cells[cell.id] || defaultDisplayChoice(cell);
-  addTipLine(tip, 'val-current', '当前选择', choice === 'ours' ? '本地' : '远端', '');
+  addTipLine(tip, 'val-current', '当前选择', choice ? (choice === 'ours' ? '本地' : '远端') : '待选择', '');
   addTipLine(tip, 'label', '行来源', axisSource(row, 'rows'), '');
   addTipLine(tip, 'label', '列来源', axisSource(column, 'columns'), '');
   if (row.state !== 'common') addTipLine(tip, 'label', '行状态', row.status, '');
@@ -1203,7 +1314,7 @@ function cycleCell(file, sheet, cell) {
 function chooseSheet(file, sheet, side) {
   const target = sheetDecision(file, sheet);
   undoStack.push({kind: 'sheet', fileId: file.id, sheet: sheet.name, previous: target.sheet});
-  target.sheet = side; renderTable(); updateStats();
+  target.sheet = side; target.confirmed = false; render();
 }
 function chooseRename(file, sheet, side) {
   const target = sheetDecision(file, sheet);
@@ -1332,6 +1443,7 @@ function resetSheet() {
   if (sheet.renameStatus === 'rename_conflict') target.rename = 'ours'; else delete target.rename;
   if (sheet.mergedCells && sheet.mergedCells.status === 'conflict') target.mergedCells = sheet.mergedCells.default || 'ours'; else delete target.mergedCells;
   target.rows = {}; target.columns = {}; target.cells = {};
+  delete target.repairs;
   for (const row of sheet.allRows || sheet.rows || []) if (row.state === 'delete_modify') target.rows[row.id] = row.default;
   for (const column of sheet.columns || []) if (column.state === 'delete_modify') target.columns[column.id] = column.default;
   for (const cell of sheet.cells || []) target.cells[cellKey(cell)] = defaultCellChoice(cell);

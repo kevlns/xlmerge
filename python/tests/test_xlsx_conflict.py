@@ -36,7 +36,7 @@ from xlsx_conflict import (
 )
 
 
-def mock_materialize_values(source, destination):
+def mock_materialize_values(source, destination, *, allow_errors=False):
     """Deterministic test double: replace formulas with their fresh cache value."""
     source = Path(source)
     destination = Path(destination)
@@ -395,6 +395,14 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
             line = process.stdout.readline().strip()
             self.assertTrue(line.startswith("MERGE_SERVER_URL="), line)
             url = line.split("=", 1)[1]
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with urllib.request.urlopen(f"{url}/api/status", timeout=5) as response:
+                    status = json.load(response)
+                if status["state"] != "preparing":
+                    break
+                time.sleep(.05)
+            self.assertEqual(status["state"], "ready", status)
             with urllib.request.urlopen(f"{url}/api/diff", timeout=5) as response:
                 payload = json.load(response)
             sheet_names = [sheet["name"] for sheet in payload["files"][0]["diff"]["sheets"]]
@@ -611,6 +619,14 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertTrue(result["ok"])
         self.assertTrue(result["url"].startswith("http://127.0.0.1:"))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with urllib.request.urlopen(f"{result['url']}/api/status", timeout=5) as response:
+                status = json.load(response)
+            if status['state'] != 'preparing':
+                break
+            time.sleep(.05)
+        self.assertEqual(status['state'], 'ready', status)
         self.assertTrue(Path(result["manifest"]).is_file())
 
         with urllib.request.urlopen(f"{result['url']}/api/diff", timeout=5) as response:
@@ -833,6 +849,20 @@ class StructuralMergeTests(unittest.TestCase):
         }
         decisions = {"files": {"Data.xlsx": {"sheets": {"Data": sheet_choices}}}}
         return _build_merged_file(file_entry, decisions)
+
+    def test_one_sided_selectable_changes_require_sheet_review(self):
+        for side in ('ours', 'theirs'):
+            with self.subTest(side=side):
+                original = [[1, 'a', 'x'], [2, 'b', 'y']]
+                changed = [[1, 'a', 'x'], [2, 'B', 'y']]
+                write_named_grid(self.base, 'Data', original)
+                write_named_grid(self.ours, 'Data', changed if side == 'ours' else original)
+                write_named_grid(self.theirs, 'Data', changed if side == 'theirs' else original)
+                diff = diff_workbooks(self.base, self.ours, self.theirs, analysis_dir=self.root / side)
+                sheet = diff['sheets'][0]
+                self.assertTrue(sheet['needsAttention'])
+                self.assertEqual(sheet['decisionCellCount'], 1)
+                self.assertEqual(sheet['conflictCount'], 0)
 
     def test_same_only_changes_sheet_is_folded_away(self):
         # 双方一致变化（resolution=same）：无决策项 → needsAttention=False 且行折叠

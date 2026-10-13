@@ -101,24 +101,10 @@ try {
         if ($_.Exception.Message -like '*circular reference*') { throw }
         throw "Unable to verify circular references: $($_.Exception.Message)"
     }
-    # Value2 is used only as a typed error probe.  The actual typed value is
-    # read from Excel's serialized cache by openpyxl so dates retain the
-    # workbook epoch/number format and booleans never become numeric 1/0.
-    foreach ($sheet in $book.Worksheets) {
-        $used = $sheet.UsedRange
-        foreach ($cell in $used.Cells) {
-            if ($cell.HasFormula) {
-                try {
-                    if ($excel.WorksheetFunction.IsError($cell.Value2)) {
-                        throw "Excel returned an error value at $($sheet.Name)!$($cell.Address($false,$false))"
-                    }
-                } catch {
-                    if ($_.Exception.Message -like '*returned an error value*') { throw }
-                    throw "Unable to verify formula result at $($sheet.Name)!$($cell.Address($false,$false)): $($_.Exception.Message)"
-                }
-            }
-        }
-    }
+    # Save the completed calculation once. Python verifies every original
+    # formula's serialized cache and cell type, including errors and missing
+    # results. Traversing UsedRange through COM duplicates that validation and
+    # also visits potentially millions of formatted, non-formula cells.
     $book.SaveCopyAs($result)
     if (!(Test-Path -LiteralPath $result -PathType Leaf)) { throw 'Excel did not produce a result file' }
     Write-State 'completed'

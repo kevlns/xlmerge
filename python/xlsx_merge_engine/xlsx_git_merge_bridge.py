@@ -1368,6 +1368,7 @@ def analyze_workbooks(
     ignore_columns: Iterable[str] = (),
     write_sidecars: bool = True,
     skip_hidden_sheets: bool = True,
+    progress=None,
 ) -> dict[str, Any]:
     base_path = Path(base_path).resolve()
     ours_path = Path(ours_path).resolve()
@@ -1388,6 +1389,8 @@ def analyze_workbooks(
         clean_merges = 0
         triplets = _sheet_triplets(wb_base, wb_ours, wb_theirs)
         for sheet_index, triplet in enumerate(triplets, 1):
+            if progress:
+                progress(sheet=str(triplet['logical']), sheetDone=sheet_index - 1, sheetTotal=len(triplets))
             name = str(triplet["logical"])
             base_name = triplet["base"]
             ours_name = triplet["ours"]

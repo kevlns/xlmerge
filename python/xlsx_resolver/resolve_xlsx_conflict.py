@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import time
+import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -42,7 +43,7 @@ def _print(data) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _launch_background(repo: Path, manifest: Path, *, open_browser: bool) -> dict:
+def _launch_background(repo: Path, manifest: Path, *, open_browser: bool, prepare=False, relative_path=None) -> dict:
     """Start the resolver as a detached child and return its URL promptly."""
     runtime_dir = manifest.parent
     stamp = int(time.time() * 1000)
@@ -59,6 +60,10 @@ def _launch_background(repo: Path, manifest: Path, *, open_browser: bool) -> dic
     ]
     if not open_browser:
         command.append("--no-browser")
+    if prepare:
+        command.append('--prepare')
+        if relative_path:
+            command.extend(['--path', relative_path])
     creationflags = (
         getattr(subprocess, "CREATE_NO_WINDOW", 0)
         | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -143,6 +148,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--manifest", required=True)
     serve_parser.add_argument("--no-browser", action="store_true")
     serve_parser.add_argument("--port", type=int, default=0, help="Fixed listen port (0 = ephemeral).")
+    serve_parser.add_argument('--prepare', action='store_true', help=argparse.SUPPRESS)
+    serve_parser.add_argument('--path', help=argparse.SUPPRESS)
 
     apply_parser = subparsers.add_parser("apply", help="Apply a decisions JSON without launching the UI.")
     apply_parser.add_argument("--manifest", required=True)
@@ -182,27 +189,34 @@ def main(argv: list[str] | None = None) -> int:
             manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
             _print({"ok": True, "manifest": str(manifest)})
             return 0
-        if args.command == "resolve":
-            manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
-            auto = _auto_only(manifest)
-            if auto is not None:
+        if args.command in ('resolve', 'launch'):
+            conflicts = detect_conflicts(repo)
+            if args.path:
+                conflicts = [c for c in conflicts if c['path'] == args.path.replace('\\', '/')]
+            if not conflicts:
+                raise ConflictError('No unresolved .xlsx/.xlsm conflicts were found.')
+            filters = load_auto_theirs_filters(repo)
+            if all(auto_theirs_path(c['path'], filters) for c in conflicts):
+                manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
+                auto = _auto_only(manifest)
                 _print(auto)
-                return 0 if auto["ok"] else 1
-            from merge_server import serve
-
-            return 0 if serve(manifest, open_browser=not args.no_browser) else 1
-        if args.command == "launch":
-            manifest = prepare_conflicts(repo, relative_path=args.path, runtime_dir=args.runtime_dir)
-            auto = _auto_only(manifest)
-            if auto is not None:
-                _print(auto)
-                return 0 if auto["ok"] else 1
-            _print(_launch_background(repo, manifest, open_browser=not args.no_browser))
+                return 0 if auto['ok'] else 1
+            if args.runtime_dir:
+                Path(args.runtime_dir).mkdir(parents=True, exist_ok=True)
+            runtime = Path(tempfile.mkdtemp(prefix='xlmerge-session-', dir=args.runtime_dir))
+            if args.command == 'resolve':
+                from merge_server import serve
+                return 0 if serve(runtime / 'manifest.json', open_browser=not args.no_browser,
+                                 prepare_repo=repo, relative_path=args.path) else 1
+            _print(_launch_background(repo, runtime / 'manifest.json', open_browser=not args.no_browser,
+                                     prepare=True, relative_path=args.path))
             return 0
         if args.command == "serve":
             from merge_server import serve
 
-            return 0 if serve(args.manifest, open_browser=not args.no_browser, port=args.port) else 1
+            return 0 if serve(args.manifest, open_browser=not args.no_browser, port=args.port,
+                             prepare_repo=find_repo_root(args.repo) if args.prepare else None,
+                             relative_path=args.path) else 1
         decisions = json.loads(Path(args.decisions).read_text(encoding="utf-8"))
         result = apply_manifest(
             args.manifest,

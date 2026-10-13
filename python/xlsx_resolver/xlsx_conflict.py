@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,7 @@ if str(_PKG_ROOT) not in sys.path:
     sys.path.insert(0, str(_PKG_ROOT))
 
 from xlsx_merge_engine.xlsx_git_merge_bridge import analyze_workbooks as analyze_structural_workbooks
+from prepare_progress import checkpoint, PreparationCancelled
 
 
 class ConflictError(RuntimeError):
@@ -306,8 +308,10 @@ def _workbook_has_formula(path: Path | str) -> bool:
         workbook.close()
 
 
-def _validate_value_workbook(path: Path | str) -> None:
-    """Snapshots must be literal and must not contain calculation errors."""
+def _validate_value_workbook(path: Path | str, *, allow_errors: bool = False) -> list[dict[str, Any]]:
+    """Validate literal snapshots; only history can contain typed unknowns."""
+    from formula_values import _ERROR_VALUES
+    errors = []
     workbook = load_workbook(path, data_only=False, keep_links=True, read_only=True)
     try:
         for ws in workbook.worksheets:
@@ -318,14 +322,19 @@ def _validate_value_workbook(path: Path | str) -> None:
                             f"Formula materialization produced a formula in {path} ({ws.title}!{cell.coordinate})."
                         )
                     if cell.data_type == "e":
-                        raise ConflictError(
-                            f"Formula materialization produced an Excel error in {path} ({ws.title}!{cell.coordinate})."
-                        )
+                        if not isinstance(cell.value, str) or cell.value not in _ERROR_VALUES:
+                            raise ConflictError(f"Invalid Excel error at {ws.title}!{cell.coordinate}: {cell.value}")
+                        if not allow_errors:
+                            raise ConflictError(
+                                f"Formula materialization produced an Excel error in {path} ({ws.title}!{cell.coordinate})."
+                            )
+                        errors.append({"sheet": ws.title, "coordinate": cell.coordinate, "error": cell.value})
     finally:
         workbook.close()
+    return errors
 
 
-def _materialize_value_snapshot(source_path: Path | str, output_path: Path | str | None) -> Path:
+def _materialize_value_snapshot(source_path: Path | str, output_path: Path | str | None, *, allow_errors: bool = False) -> Path:
     """Calculate one complete source workbook and return its literal snapshot.
 
     The implementation lives in formula_values.py so Excel/LibreOffice policy is
@@ -342,7 +351,9 @@ def _materialize_value_snapshot(source_path: Path | str, output_path: Path | str
     except ImportError as exc:
         raise ConflictError("Formula materialization is unavailable; refusing to compare formula workbooks.") from exc
     try:
-        result = materialize_values(source, destination)
+        result = materialize_values(source, destination, allow_errors=allow_errors)
+    except PreparationCancelled:
+        raise
     except Exception as exc:
         raise ConflictError(f"Failed to calculate workbook {source}: {exc}") from exc
     value_path = Path(result) if result is not None else destination
@@ -350,7 +361,7 @@ def _materialize_value_snapshot(source_path: Path | str, output_path: Path | str
         value_path = (destination.parent / value_path).resolve()
     if not value_path.exists():
         raise ConflictError(f"Formula materialization did not produce a workbook for {source}.")
-    _validate_value_workbook(value_path)
+    _validate_value_workbook(value_path, allow_errors=allow_errors)
     return value_path
 
 
@@ -367,6 +378,7 @@ def _snapshot_workbooks(
     snapshots: dict[str, Path | None] = {}
     metadata: dict[str, dict[str, Any]] = {}
     for side, source in sources.items():
+        checkpoint(phase='计算公式并验证', side=side, sheet='', sheetDone=0, sheetTotal=0)
         if source is None:
             snapshots[side] = None
             continue
@@ -375,10 +387,10 @@ def _snapshot_workbooks(
         # needless package rewrite (and preserve exact zip bytes for safety).
         if _workbook_has_formula(source):
             output = analysis_dir / f"{side}.values{source.suffix.lower()}"
-            value_path = _materialize_value_snapshot(source, output)
+            value_path = _materialize_value_snapshot(source, output, allow_errors=True)
         else:
             value_path = source
-            _validate_value_workbook(value_path)
+            _validate_value_workbook(value_path, allow_errors=True)
         snapshots[side] = value_path
         metadata[side] = {
             "sourcePath": str(source),
@@ -386,7 +398,181 @@ def _snapshot_workbooks(
             "valuePath": str(value_path),
             "valueSha256": _sha256_path(value_path),
         }
+        errors = _validate_value_workbook(value_path, allow_errors=True)
+        metadata[side]["errors"] = errors
+        if errors:
+            source_book = load_workbook(source, data_only=False, keep_links=False)
+            try:
+                for error in errors:
+                    error["formula"] = source_book[error["sheet"]][error["coordinate"]].value
+                    error.update(_repair_field_info(source_book[error['sheet']], error['coordinate']))
+            finally:
+                source_book.close()
+    _replace_common_errors(snapshots, metadata, analysis_dir)
     return snapshots, metadata
+
+
+def _repair_field_info(ws, coordinate):
+    column = ws[coordinate].column
+    var = next((r for r in range(1, min(ws.max_row, 40) + 1) if ws.cell(r, 1).value == '##var'), None)
+    typ = next((r for r in range(1, min(ws.max_row, 80) + 1) if ws.cell(r, 1).value == '##type'), None)
+    if var is None or typ is None:
+        return {}
+    field = str(ws.cell(var, column).value or '')
+    kind = str(ws.cell(typ, column).value or '').strip().casefold()
+    info = {'field': field, 'type': kind}
+    default = '' if kind == 'string' else False if kind == 'bool' else 0
+    try:
+        _validate_repair_value(kind, default)
+    except ConflictError:
+        return info
+    guarded = field.casefold().endswith('id') or 'ref' in field.casefold() or any(
+        ws.cell(r, 1).value in ('##ref', '##refs', '##key', '##index', '##validator', '##validate', '##validation', '##min', '##max', '##range', '##constraint')
+        and ws.cell(r, column).value not in (None, '') for r in range(var, typ + 10))
+    if not guarded:
+        info['defaultValue'] = default
+    return info
+
+
+def _validate_repair_value(kind, value):
+    import math
+    if kind == 'string' and isinstance(value, str):
+        return
+    if kind == 'bool' and isinstance(value, bool):
+        return
+    if kind in ('float', 'double', 'decimal') and type(value) in (int, float) and math.isfinite(value):
+        return
+    match = re.fullmatch(r'(u?int)(8|16|32|64)?|(s?byte|u?short|u?long)', kind)
+    if match and type(value) is int:
+        bits = int(match.group(2) or 32) if match.group(1) else {'byte': 8, 'sbyte': 8, 'short': 16, 'ushort': 16, 'long': 64, 'ulong': 64}[kind]
+        unsigned = kind.startswith('u') or kind == 'byte'
+        if (0 if unsigned else -(2 ** (bits - 1))) <= value <= 2 ** (bits if unsigned else bits - 1) - 1:
+            return
+    raise ConflictError(f'修复值不符合声明类型 {kind!r}；ID/引用值还需人工核对业务有效性。')
+
+
+def _selected_repairs(sheet, selection):
+    side = selection.get('sheet')
+    errors = [e for e in sheet.get('calculationErrors', []) if e['side'] == side]
+    values = (selection.get('repairs') or {}).get(side, {})
+    if not isinstance(values, dict):
+        raise ConflictError('修复值必须按单元格提供。')
+    allowed = {e['coordinate']: e for e in errors}
+    if set(values) - set(allowed):
+        raise ConflictError('修复包含未经审阅的单元格。')
+    for coordinate, value in values.items():
+        _validate_repair_value(allowed[coordinate].get('type', ''), value)
+    for error in errors:
+        if error['coordinate'] not in values:
+            raise ConflictError(f"请修复所选 {side} 来源的 {sheet['name']}!{error['coordinate']}: {error['error']}")
+    return values
+
+
+def _error_replacement_schema(ws):
+    """Only explicit primitive Luban fields with unique, valid IDs qualify."""
+    var_row = next((row for row in range(1, min(ws.max_row, 40) + 1)
+                    if ws.cell(row, 1).value == "##var"), None)
+    if var_row is None:
+        return None
+    type_row = next((row for row in range(var_row + 1, min(ws.max_row, var_row + 40) + 1)
+                     if ws.cell(row, 1).value == "##type"), None)
+    if type_row is None:
+        return None
+    fields = {}
+    duplicates = set()
+    for cell in list(ws._cells.values()):
+        if cell.row != var_row or cell.column == 1 or not isinstance(cell.value, str) or not cell.value.strip():
+            continue
+        field = cell.value.strip()
+        if field in fields:
+            duplicates.add(field)
+        fields[field] = cell.column
+    fields = {field: column for field, column in fields.items() if field not in duplicates}
+    ids = [column for field, column in fields.items() if field.casefold() == "id"]
+    if len(ids) != 1:
+        return None
+    start = var_row
+    while start <= ws.max_row and isinstance(ws.cell(start, 1).value, str) and ws.cell(start, 1).value.startswith("##"):
+        start += 1
+    records, duplicate_ids = {}, set()
+    for cell in list(ws._cells.values()):
+        if cell.column != ids[0] or cell.row < start:
+            continue
+        if cell.data_type == "e" or cell.value in (None, "") or not isinstance(cell.value, (str, int, float)) or isinstance(cell.value, bool):
+            continue
+        key = (cell.data_type, cell.value)
+        if key in records:
+            duplicate_ids.add(key)
+        records[key] = cell.row
+    records = {key: row for key, row in records.items() if key not in duplicate_ids}
+    defaults = {}
+    for field, column in fields.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field) or field.casefold().endswith("id") or "ref" in field.casefold():
+            continue
+        if any(ws.cell(row, 1).value in ("##ref", "##refs", "##key", "##index", "##validator", "##validate", "##validation", "##min", "##max", "##range", "##constraint")
+               and ws.cell(row, column).value not in (None, "") for row in range(var_row, start)):
+            continue
+        kind = str(ws.cell(type_row, column).value or "").strip().casefold()
+        if kind == "string":
+            defaults[field] = (column, kind, "")
+        elif kind == "bool":
+            defaults[field] = (column, kind, False)
+        elif re.fullmatch(r"(?:s?byte|u?short|u?int|u?long|float|double|decimal|u?int(?:8|16|32|64))", kind):
+            defaults[field] = (column, kind, 0)
+    return records, defaults
+
+
+def _replace_common_errors(paths, metadata, analysis_dir):
+    """Apply authorized defaults only to corresponding errors on both sides.
+
+    Use declared fields and unique IDs before structural alignment. Never
+    guess types from number formats, errors, or adjacent cells, and never
+    modify an extracted Git source or the repository working tree.
+    """
+    if not all(metadata.get(side, {}).get("errors") for side in ("ours", "theirs")):
+        return
+    from formula_values import _set_literal
+    books = {side: load_workbook(paths[side], keep_vba=paths[side].suffix.lower() == ".xlsm")
+             for side in ("ours", "theirs")}
+    replacements = {side: [] for side in books}
+    try:
+        errors = {side: {(error["sheet"], error["coordinate"]): error for error in metadata[side]["errors"]}
+                  for side in books}
+        for name in set(books["ours"].sheetnames) & set(books["theirs"].sheetnames):
+            schemas = {side: _error_replacement_schema(book[name]) for side, book in books.items()}
+            if not all(schemas.values()):
+                continue
+            ours_rows, ours_fields = schemas["ours"]
+            theirs_rows, theirs_fields = schemas["theirs"]
+            by_row = {row: key for key, row in ours_rows.items()}
+            by_column = {info[0]: field for field, info in ours_fields.items()}
+            for error in metadata["ours"]["errors"]:
+                if error["sheet"] != name:
+                    continue
+                own = books["ours"][name][error["coordinate"]]
+                key, field = by_row.get(own.row), by_column.get(own.column)
+                if key not in theirs_rows or field not in theirs_fields or ours_fields[field][1] != theirs_fields[field][1]:
+                    continue
+                cells = {"ours": own, "theirs": books["theirs"][name].cell(theirs_rows[key], theirs_fields[field][0])}
+                if not all(cell.data_type == "e" for cell in cells.values()):
+                    continue
+                kind, value = ours_fields[field][1:]
+                for side, cell in cells.items():
+                    issue = errors[side][(name, cell.coordinate)]
+                    replacements[side].append({**issue, "field": field, "recordId": key[1], "type": kind, "value": value})
+                    _set_literal(cell, value)
+        for side, repairs in replacements.items():
+            if not repairs:
+                continue
+            output = analysis_dir / f"{side}.review.values{paths[side].suffix}"
+            books[side].save(output)
+            paths[side] = output
+            removed = {(repair["sheet"], repair["coordinate"]) for repair in repairs}
+            metadata[side].update(valuePath=str(output), valueSha256=_sha256_path(output), replacements=repairs,
+                                  errors=[error for error in metadata[side]["errors"] if (error["sheet"], error["coordinate"]) not in removed])
+    finally:
+        for book in books.values():
+            book.close()
 
 
 def _cell_token(cell, cached_cell=None) -> tuple[Any, str] | None:
@@ -702,7 +888,10 @@ def _structural_sheet_diff(report_sheet, wb_base, wb_ours, wb_theirs,
             ours_token = _cell_token(ours_cell, ours_cached)
             theirs_token = _cell_token(theirs_cell, theirs_cached)
             has_base = row.get("baseRow") is not None and column.get("baseCol") is not None
-            changed = not (ours_token == theirs_token == base_token)
+            error_sides = {side: cell.value for side, cell in
+                           (("base", base_cell), ("ours", ours_cell), ("theirs", theirs_cell))
+                           if cell is not None and cell.data_type == "e"}
+            changed = bool(error_sides) or not (ours_token == theirs_token == base_token)
             structural = row["state"] != "common" or column["state"] != "common"
             selectable = (
                 row["state"] in ("common", "delete_modify")
@@ -712,6 +901,8 @@ def _structural_sheet_diff(report_sheet, wb_base, wb_ours, wb_theirs,
                 changed_row_ids.add(row["id"])
             resolution = _cell_resolution(base_cell, ours_cell, theirs_cell, has_base=has_base,
                                           base_cached=base_cached, ours_cached=ours_cached, theirs_cached=theirs_cached)
+            if error_sides:
+                resolution = "conflict"
             if changed and resolution != "same":
                 row_attention.add(row["id"])
             stable_id = f'{row["id"]}|{column["id"]}'
@@ -735,6 +926,8 @@ def _structural_sheet_diff(report_sheet, wb_base, wb_ours, wb_theirs,
                 "changed": changed,
                 "structural": structural,
                 "selectable": selectable,
+                "requiresChoice": bool(error_sides),
+                "errorSides": error_sides,
             })
 
     # 只显示需要关注的行：结构变化行 + 含非 same（需决策/有变化信息）cell 的行
@@ -797,9 +990,82 @@ def _structural_sheet_diff(report_sheet, wb_base, wb_ours, wb_theirs,
         "rawChangedCellCount": sum(cell["changed"] for cell in cells),
         "conflictCount": len(selectable_cells),
         "structuralConflictCount": structural_conflicts,
-        "needsAttention": bool(selectable_cells) or structural_conflicts > 0
+        "needsAttention": decision_cell_count > 0 or structural_conflicts > 0
                          or report_sheet.get("renameStatus") == "rename_conflict",
     }
+
+
+def _require_error_review(sheet: dict[str, Any], snapshots: dict[str, Any]) -> None:
+    """Unknown values may never justify alignment or automatic resolution."""
+    names = sheet.get("names") or {side: sheet["name"] for side in ("base", "ours", "theirs")}
+    relevant = [{**error, "side": side} for side, meta in snapshots.items()
+                for error in meta.get("errors", []) if error["sheet"] == names.get(side)]
+    repairs = [{**repair, "side": side} for side, meta in snapshots.items()
+               for repair in meta.get("replacements", []) if repair["sheet"] == names.get(side)]
+    if repairs:
+        sheet.update(replacements=repairs, needsAttention=True, rebuildRequired=True)
+        lookup = {(repair["side"], repair["coordinate"]): repair for repair in repairs}
+        rows = {row["id"]: row for row in sheet.get("allRows", [])}
+        columns = {column["id"]: column for column in sheet.get("columns", [])}
+        corrected_rows, excluded = set(), set()
+        for cell in sheet.get("allCells", []):
+            row, column = rows[cell["rowId"]], columns[cell["colId"]]
+            pair = {}
+            for side in ("ours", "theirs"):
+                if row.get(f"{side}Row") is not None and column.get(f"{side}Col") is not None:
+                    coordinate = f'{get_column_letter(column[f"{side}Col"])}{row[f"{side}Row"]}'
+                    if (side, coordinate) in lookup:
+                        pair[side] = lookup[(side, coordinate)]
+            if len(pair) != 2 or pair["ours"]["recordId"] != pair["theirs"]["recordId"] or pair["ours"]["field"] != pair["theirs"]["field"]:
+                continue
+            cell.update(replacement=pair, requiresChoice=False, selectable=False, resolution="replacement", changed=True)
+            corrected_rows.add(row["id"])
+            if row.get("baseRow") is not None and column.get("baseCol") is not None:
+                excluded.add(("base", f'{get_column_letter(column["baseCol"])}{row["baseRow"]}'))
+        relevant = [error for error in relevant if (error["side"], error["coordinate"]) not in excluded]
+        visible = {row["id"] for row in sheet.get("rows", [])} | corrected_rows
+        sheet["rows"] = [row for row in sheet.get("allRows", []) if row["id"] in visible]
+        sheet["gridCells"] = [cell for cell in sheet.get("allCells", []) if cell["rowId"] in visible]
+        sheet["cells"] = [cell for cell in sheet["gridCells"] if cell["changed"]]
+        sheet["changedCount"] = sheet["decisionCellCount"] = sum(cell["selectable"] for cell in sheet["cells"])
+        sheet["conflictCount"] = sum(cell["resolution"] == "conflict" for cell in sheet["cells"])
+    if not relevant:
+        return
+    sheet["calculationErrors"] = relevant
+    sheet["needsAttention"] = True
+    if sheet["action"] == "merge":
+        represented = sum(len(cell.get("errorSides", {})) for cell in sheet.get("allCells", []) if cell.get("requiresChoice"))
+        structural = any(axis["state"] != "common"
+                         for axis in [*sheet.get("allRows", []), *sheet.get("columns", [])])
+        id_columns = [column for column in sheet.get("columns", []) if column["id"].casefold() == "id"]
+        identity_cells = [cell for cell in sheet.get("allCells", [])
+                          if id_columns and cell["colId"] == id_columns[0]["id"]]
+        uncertain_rows = {cell["rowId"] for cell in sheet.get("allCells", []) if cell.get("requiresChoice")}
+        reliable = bool(id_columns) and all(
+            any(cell["rowId"] == row_id and not cell.get("requiresChoice")
+                and cell["base"] is not None and cell["base"] == cell["ours"] == cell["theirs"]
+                and all(sum(other[side] == cell[side] for other in identity_cells) == 1
+                        for side in ("base", "ours", "theirs")) for cell in identity_cells)
+            for row_id in uncertain_rows
+        )
+        if not structural and represented == len(relevant) and reliable:
+            by_coordinate = {(error["side"], error["coordinate"]): error for error in relevant}
+            rows = {row["id"]: row for row in sheet["allRows"]}
+            columns = {column["id"]: column for column in sheet["columns"]}
+            for cell in sheet["allCells"]:
+                if cell.get("requiresChoice"):
+                    cell["calculationErrors"] = {}
+                    for side in cell["errorSides"]:
+                        coordinate = f'{get_column_letter(columns[cell["colId"]][f"{side}Col"])}{rows[cell["rowId"]][f"{side}Row"]}'
+                        cell["calculationErrors"][side] = by_coordinate[(side, coordinate)]
+            return
+    # Errors in headers, unmatched/deleted rows, or changing axes undermine
+    # structural evidence. Require a whole-sheet choice instead of guessing
+    # row/column correspondence or interpreting an unknown as "unchanged".
+    sheet.update(action="conflict_calculation_errors", requiresChoice=True,
+                 cells=[], gridCells=[], allCells=[], rows=[], allRows=[], columns=[],
+                 headerRows=[], changedCount=0, conflictCount=0,
+                 structuralConflictCount=1, renameStatus="unchanged", mergedCells=None)
 
 
 def diff_workbooks(
@@ -814,7 +1080,8 @@ def diff_workbooks(
     snapshot_paths, value_snapshots = _snapshot_workbooks(
         base_path, ours_path, theirs_path, structural_dir,
     )
-    # These workbooks are complete, calculated value snapshots.  Keeping the
+    # These workbooks are complete, calculated snapshots with typed errors
+    # represented as unknowns requiring review. Keeping the
     # three sides separate is important for cross-sheet formulas: each side is
     # calculated against its own original workbook before alignment/merge.
     wb_base = load_workbook(snapshot_paths["base"], data_only=False, keep_links=True) if snapshot_paths["base"] else None
@@ -822,13 +1089,17 @@ def diff_workbooks(
     wb_theirs = load_workbook(snapshot_paths["theirs"], data_only=False, keep_links=True)
     wb_base_v = wb_ours_v = wb_theirs_v = None
     try:
+        if any(meta.get("errors") or meta.get("replacements") for meta in value_snapshots.values()):
+            skip_hidden_sheets = False
         if base_path is not None:
             structural = analyze_structural_workbooks(
                 snapshot_paths["base"], snapshot_paths["ours"], snapshot_paths["theirs"], structural_dir,
                 write_sidecars=False, skip_hidden_sheets=skip_hidden_sheets,
+                progress=lambda **p: checkpoint(phase='对齐 Sheet / 行 / 列', **p),
             )
             sheets = []
-            for report_sheet in structural["sheets"]:
+            for index, report_sheet in enumerate(structural["sheets"]):
+                checkpoint(phase='生成审阅数据', sheet=report_sheet['name'], sheetDone=index, sheetTotal=len(structural['sheets']))
                 if report_sheet["action"] == "merge":
                     sheets.append(_structural_sheet_diff(
                         report_sheet, wb_base, wb_ours, wb_theirs,
@@ -866,6 +1137,8 @@ def diff_workbooks(
                     "structuralConflictCount": int(action.startswith("conflict_")),
                     "needsAttention": action.startswith("conflict_"),
                 })
+            for sheet in sheets:
+                _require_error_review(sheet, value_snapshots)
             return {
                 "engineVersion": structural["version"],
                 "valueSnapshots": value_snapshots,
@@ -875,21 +1148,23 @@ def diff_workbooks(
                     "changedCellCount": sum(sheet["changedCount"] for sheet in sheets),
                     "cellConflictCount": sum(sheet["conflictCount"] for sheet in sheets),
                     "structuralConflictCount": sum(sheet.get("structuralConflictCount", 0) for sheet in sheets),
-                    "sheetConflictCount": structural["summary"].get("sheetConflictCount", 0),
+                    "sheetConflictCount": sum(sheet["action"].startswith("conflict_") for sheet in sheets),
                 },
             }
 
         sheets: list[dict[str, Any]] = []
-        for name in _ordered_sheet_names(wb_base, wb_ours, wb_theirs):
+        ordered_names = _ordered_sheet_names(wb_base, wb_ours, wb_theirs)
+        for index, name in enumerate(ordered_names):
+            checkpoint(phase='生成审阅数据', sheet=name, sheetDone=index, sheetTotal=len(ordered_names))
             base_exists = wb_base is not None and name in wb_base.sheetnames
             ours_exists = name in wb_ours.sheetnames
             theirs_exists = name in wb_theirs.sheetnames
             ws_base = wb_base[name] if base_exists else None
             ws_ours = wb_ours[name] if ours_exists else None
             ws_theirs = wb_theirs[name] if theirs_exists else None
-            ws_base_v = wb_base_v[name] if base_exists else None
-            ws_ours_v = wb_ours_v[name] if ours_exists else None
-            ws_theirs_v = wb_theirs_v[name] if theirs_exists else None
+            ws_base_v = wb_base_v[name] if base_exists and wb_base_v is not None else None
+            ws_ours_v = wb_ours_v[name] if ours_exists and wb_ours_v is not None else None
+            ws_theirs_v = wb_theirs_v[name] if theirs_exists and wb_theirs_v is not None else None
 
             if ours_exists and theirs_exists:
                 sheet = _modified_sheet_diff(name, ws_base, ws_ours, ws_theirs,
@@ -939,6 +1214,8 @@ def diff_workbooks(
                 "conflictCount": conflict_count,
             })
 
+        for sheet in sheets:
+            _require_error_review(sheet, value_snapshots)
         return {
             "valueSnapshots": value_snapshots,
             "sheets": sheets,
@@ -1030,7 +1307,8 @@ def prepare_conflicts(
     auto_filters = load_auto_theirs_filters(repo_root)
     prepared_files = []
     auto_entries: list[dict[str, Any]] = []
-    for item in conflicts:
+    for index, item in enumerate(conflicts):
+        checkpoint(file=item['path'], fileDone=index, fileTotal=len(conflicts), phase='提取三方版本', sheet='', sheetDone=0, sheetTotal=0, side='')
         path = item["path"]
         if auto_theirs_path(path, auto_filters):
             if 3 not in item["stages"]:
@@ -1106,6 +1384,7 @@ def prepare_conflicts(
             "autoTheirsCount": len(auto_entries),
         },
     }
+    checkpoint(phase='完成解析', fileDone=len(conflicts), sheet='', sheetDone=0, sheetTotal=0)
     manifest_path = target_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return manifest_path
@@ -1216,8 +1495,19 @@ def _validate_decisions(manifest: dict[str, Any], decisions: dict[str, Any]) -> 
         sheet_choices = file_choice.get("sheets") or {}
         for sheet in file_entry["diff"]["sheets"]:
             choice = sheet_choices.get(sheet["name"]) or {}
+            if choice.get('sheet') in ('ours', 'theirs'):
+                if sheet['action'] != 'merge' and not sheet['action'].startswith('conflict_'):
+                    raise ConflictError('自动处理 Sheet 不支持额外整表覆盖。')
+                _selected_repairs(sheet, choice)
+                continue
             if sheet["action"].startswith("conflict_") and choice.get("sheet") not in ("ours", "theirs"):
                 missing.append(f"{file_entry['path']} / {sheet['name']} / <sheet>")
+            if sheet["action"].startswith("conflict_"):
+                selected_errors = [error for error in sheet.get("calculationErrors", [])
+                                   if error["side"] == choice.get("sheet")]
+                if selected_errors:
+                    error = selected_errors[0]
+                    raise ConflictError(f"Selected {error['side']} source has an Excel error at {file_entry['path']} / {error['sheet']}!{error['coordinate']}: {error['error']}")
             if sheet.get("renameStatus") == "rename_conflict" and choice.get("rename") not in ("ours", "theirs"):
                 missing.append(f"{file_entry['path']} / {sheet['name']} / <rename>")
             if (sheet.get("mergedCells") or {}).get("status") == "conflict" and choice.get("mergedCells") not in ("ours", "theirs"):
@@ -1232,7 +1522,10 @@ def _validate_decisions(manifest: dict[str, Any], decisions: dict[str, Any]) -> 
                     missing.append(f"{file_entry['path']} / {sheet['name']} / {column['id']}")
             cell_choices = choice.get("cells") or {}
             for cell in sheet["cells"]:
-                if cell["resolution"] == "conflict" and _cell_choice(cell_choices, cell) not in ("ours", "theirs"):
+                side = _cell_choice(cell_choices, cell)
+                if side in cell.get("errorSides", {}):
+                    raise ConflictError(f"Selected {side} source has an Excel error at {file_entry['path']} / {sheet['name']} / {cell['coordinate']}: {cell['errorSides'][side]}")
+                if cell["resolution"] == "conflict" and side not in ("ours", "theirs"):
                     missing.append(f"{file_entry['path']} / {sheet['name']} / {cell['coordinate']}")
     if missing:
         preview = "\n".join(f"- {item}" for item in missing[:20])
@@ -1563,7 +1856,7 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
         expected = meta.get("valueSha256")
         if expected and _sha256_path(value_path) != expected:
             raise ConflictError(f"Immutable {side} value snapshot changed for {file_entry['path']}; refusing apply.")
-        _validate_value_workbook(value_path)
+        _validate_value_workbook(value_path, allow_errors=True)
         value_paths[side] = value_path
     fd, temp_name = tempfile.mkstemp(prefix=f".{output.stem}-", suffix=extension, dir=output.parent)
     os.close(fd)
@@ -1586,9 +1879,10 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
             name = sheet["name"]
             action = sheet["action"]
             selection = sheet_choices.get(name) or {}
+            whole_source = selection.get('sheet') in ('ours', 'theirs')
             original_name = (sheet.get("names") or {}).get("ours") or name
             is_affected = (
-                action.startswith("conflict_")
+                whole_source or action.startswith("conflict_")
                 or action in ("auto_add_ours", "auto_add_theirs")
                 or (
                     action == "merge"
@@ -1601,7 +1895,9 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
             )
             if is_affected:
                 affected_sheet_names.add(original_name)
-                if action == "merge":
+                if whole_source:
+                    affected_output_sheet_names.add((sheet.get('names') or {}).get(selection['sheet']) or name)
+                elif action == "merge":
                     affected_output_sheet_names.add(_selected_sheet_name(sheet, selection))
                 elif action.startswith("conflict_"):
                     affected_output_sheet_names.add((sheet.get("names") or {}).get(selection.get("sheet")) or name)
@@ -1631,13 +1927,20 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
                         index=min(wb_ours.sheetnames.index(ours_name), len(wb_out.sheetnames)),
                     )
                 continue
-            if action.startswith("conflict_"):
+            if whole_source or action.startswith("conflict_"):
                 side = selection["sheet"]
                 if side == "ours":
                     source_wb = wb_ours
                 else:
                     source_wb = wb_theirs
                 source_name = (sheet.get("names") or {}).get(side) or name
+                if source_name in source_wb.sheetnames:
+                    from formula_values import _set_literal
+                    for coordinate, value in _selected_repairs(sheet, selection).items():
+                        _set_literal(source_wb[source_name][coordinate], value)
+                ours_name = (sheet.get("names") or {}).get("ours") or name
+                if ours_name != source_name and ours_name in wb_out.sheetnames:
+                    wb_out.remove(wb_out[ours_name])
                 if source_name in source_wb.sheetnames:
                     _replace_sheet(wb_out, source_wb[source_name], source_wb.sheetnames)
                 elif name in wb_out.sheetnames:
@@ -1727,6 +2030,8 @@ def _build_merged_file(file_entry: dict[str, Any], decisions: dict[str, Any]) ->
                             raise ConflictError(
                                 f"Affected Sheet {ws.title} retained formula at {cell.coordinate}; output was not written."
                             )
+                        if cell.data_type == "e":
+                            raise ConflictError(f"Selected source contains an Excel error at {ws.title}!{cell.coordinate}; output was not written.")
         finally:
             check_wb.close()
         if keep_vba:
@@ -1785,7 +2090,25 @@ def _build_commit_message(manifest: dict[str, Any], decisions: dict[str, Any]) -
         sheet_choices = file_choice.get("sheets") or {}
         for sheet in file_entry["diff"]["sheets"]:
             choice = sheet_choices.get(sheet["name"]) or {}
+            if choice.get('sheet') in ('ours', 'theirs'):
+                lines.append(f"resolve(sheet): [表:{file_entry['path']}]-[sheet:{sheet['name']}]-[选择:{choice['sheet']} 全量]")
+                for coordinate, value in _selected_repairs(sheet, choice).items():
+                    lines.append(f"resolve(manual): [表:{file_entry['path']}]-[sheet:{sheet['name']}]-[来源:{choice['sheet']}]-[单元格:{coordinate}]-[值:{json.dumps(value, ensure_ascii=False)}]")
+            recorded = set()
+            for repair in sheet.get("replacements", []):
+                if sheet["action"].startswith("conflict_") and repair["side"] != choice.get("sheet"):
+                    continue
+                key = (repair["side"], repair["coordinate"]) if repair.get("manual") else (repair["recordId"], repair["field"])
+                if key in recorded:
+                    continue
+                recorded.add(key)
+                if repair.get("manual"):
+                    lines.append(f"resolve(manual): [表:{file_entry['path']}]-[sheet:{sheet['name']}]-[来源:{repair['side']}]-[单元格:{repair['coordinate']}]-[字段:{repair['field']}]-[类型:{repair['type']}]-[值:{json.dumps(repair['value'], ensure_ascii=False)}]")
+                else:
+                    lines.append(f"resolve(default): [表:{file_entry['path']}]-[sheet:{sheet['name']}]-[id:{repair['recordId']}]-[字段:{repair['field']}]-[类型:{repair['type']}]-[值:{json.dumps(repair['value'], ensure_ascii=False)}]")
             cell_choices = choice.get("cells") or {}
+            if choice.get('sheet') in ('ours', 'theirs'):
+                continue
             for cell in sheet["cells"]:
                 if cell.get("resolution") != "conflict":
                     continue
@@ -1856,7 +2179,7 @@ def _validate_manifest_sources(manifest: dict[str, Any], repo: Path) -> None:
             snapshot = Path(value_path).resolve()
             if not snapshot.exists() or _sha256_path(snapshot) != expected_value:
                 raise ConflictError(f"Immutable value snapshot changed for {relative} ({side}); refusing apply.")
-            _validate_value_workbook(snapshot)
+            _validate_value_workbook(snapshot, allow_errors=True)
         output = (repo / Path(relative)).resolve()
         expected_output = entry.get("outputSha256")
         if expected_output is None:

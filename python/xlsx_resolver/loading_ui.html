@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Excel 冲突解析进度</title>
+<style>
+:root{--ink:#24221d;--paper:#fffdf4;--gold:#f2cb54;--muted:#777367}*{box-sizing:border-box}
+body{margin:0;background:#eeeadd;color:var(--ink);font-family:"Microsoft YaHei",sans-serif;min-height:100vh;display:grid;place-items:center;background-image:linear-gradient(#24221d06 1px,transparent 1px),linear-gradient(90deg,#24221d06 1px,transparent 1px);background-size:24px 24px}
+main{width:min(780px,calc(100% - 40px));border:2px solid var(--ink);background:var(--paper);box-shadow:8px 8px 0 var(--ink)}
+header{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid var(--ink);padding:18px 28px;font-size:12px;font-weight:bold;letter-spacing:2px}
+.status{background:var(--gold);padding:3px 8px;letter-spacing:0}.body{padding:36px 28px}h1{font-size:32px;margin:0 0 12px;font-family:Georgia,"SimSun",serif}.hint{color:var(--muted);font-size:13px;line-height:1.8;margin-bottom:32px}
+.file{font-size:17px;font-weight:bold;overflow-wrap:anywhere;margin:10px 0 24px}.label{font-size:11px;letter-spacing:2px;color:var(--muted)}
+.counts{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--ink)}.metric{padding:18px}.metric+ .metric{border-left:1px solid var(--ink)}.number{font:32px Consolas,monospace;margin:8px 0}.detail{font-size:12px;color:var(--muted);overflow-wrap:anywhere;min-height:18px}
+progress{display:block;appearance:none;width:100%;height:8px;margin:24px 0 12px;border:0;background:#e4dfd1}progress::-webkit-progress-bar{background:#e4dfd1}progress::-webkit-progress-value{background:var(--ink)}progress:not([value]){animation:pulse 1.4s infinite}
+footer{border-top:2px solid var(--ink);padding:18px 28px;display:flex;align-items:center;justify-content:space-between;gap:20px;font-size:12px}button{font:inherit;font-weight:bold;border:2px solid var(--ink);background:var(--gold);padding:11px 18px;box-shadow:3px 3px 0 var(--ink);cursor:pointer;white-space:nowrap}button:disabled{opacity:.5;cursor:wait;box-shadow:none}button:focus-visible{outline:3px solid #267da0;outline-offset:4px}#error{color:#a32929;white-space:pre-wrap;overflow-wrap:anywhere}
+@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){progress:not([value]){animation:none}}@media(max-width:520px){header,.body,footer{padding:20px}h1{font-size:26px}.counts{grid-template-columns:1fr}.metric+.metric{border-left:0;border-top:1px solid var(--ink)}footer{align-items:flex-start;flex-direction:column}}
+</style>
+<main><header><span>XLMERGE / EXCEL 冲突解决工具</span><span class="status" id="state">解析中</span></header>
+<div class="body" aria-live="polite"><h1 id="phase">准备解析工作簿</h1><div class="hint">解析完成后自动进入审阅页面。你可以随时中断本次解析。</div>
+<div class="label">当前工作簿</div><div class="file" id="file">正在读取冲突列表…</div>
+<div class="counts"><div class="metric"><div class="label">已完成工作簿 / 总数</div><div class="number" id="files">— / —</div><div class="detail" id="side">等待解析</div></div><div class="metric"><div class="label">当前阶段 Sheet 已处理 / 总数</div><div class="number" id="sheets">— / —</div><div class="detail" id="sheet">等待 Sheet 对齐</div></div></div>
+<progress id="progress" aria-label="已完成工作簿进度"></progress><div class="detail" id="detail">进度按实际完成数量更新</div><p id="error" role="alert"></p></div>
+<footer><span id="footer">解析期间不会修改仓库表格。</span><button id="cancel">关闭并中断解析</button></footer></main>
+<script>
+let stopping=false, acknowledged=false, finished=false;
+const el=id=>document.getElementById(id);
+async function poll(){
+ try{
+  const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('无法读取解析进度');const s=await r.json();
+  if(s.state==='ready'&&!stopping){location.reload();return;}
+  el('phase').textContent=s.phase;el('file').textContent=s.file||'正在读取冲突列表…';
+  el('files').textContent=s.fileTotal?`${s.fileDone} / ${s.fileTotal}`:'— / —';
+  el('sheets').textContent=s.sheetTotal?`${s.sheetDone} / ${s.sheetTotal}`:'— / —';
+  el('sheet').textContent=s.sheet||'整本计算期间不提供逐 Sheet 进度';
+  el('side').textContent=({base:'Base 版本',ours:'本地版本',theirs:'远端版本'})[s.side]||s.phase;
+  if(s.fileTotal){el('progress').max=s.fileTotal;el('progress').value=s.fileDone;}
+  el('state').textContent=({preparing:'解析中',cancelling:'正在中断',cancelled:'已中断',failed:'解析失败'})[s.state]||'已完成';
+  if(s.state==='failed'){el('error').textContent=s.error||'解析失败';el('cancel').textContent='关闭页面和服务';}
+  if(s.state==='cancelled'){finish();return;}
+ }catch(e){if(acknowledged){finish();return;}el('error').textContent=e.message+'，正在重试…';}
+ if(!finished)setTimeout(poll,500);
+}
+function finish(){finished=true;el('state').textContent='已停止';el('phase').textContent='解析已停止';el('footer').textContent='工作树未修改，可以关闭此页。';el('cancel').disabled=false;el('cancel').textContent='关闭页面';el('cancel').onclick=()=>window.close();if(stopping)window.close();}
+el('cancel').onclick=async()=>{stopping=true;el('cancel').disabled=true;el('cancel').textContent='正在停止计算…';try{const r=await fetch('/api/shutdown',{method:'POST'});if(!r.ok)throw Error('中断请求失败');acknowledged=true;}catch(e){stopping=false;el('cancel').disabled=false;el('error').textContent=e.message;}};
+poll();
+</script></html>

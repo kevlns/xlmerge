@@ -26,7 +26,8 @@ from xml.etree import ElementTree
 from openpyxl import load_workbook
 from openpyxl.cell.rich_text import CellRichText, InlineFont, TextBlock
 from openpyxl.formula import Tokenizer
-from openpyxl.utils.cell import range_boundaries
+from openpyxl.formula.translate import Translator
+from openpyxl.utils.cell import coordinate_to_tuple, range_boundaries
 
 
 class FormulaValueError(RuntimeError):
@@ -131,13 +132,72 @@ def _without_string_literals(formula: str) -> str:
 
 def _iter_formula_cells(workbook: Any) -> Iterable[tuple[Any, Any]]:
     for worksheet in workbook.worksheets:
-        for row in worksheet.iter_rows():
-            for cell in row:
-                # A literal string beginning with '=' is data_type='s' and is
-                # deliberately not a formula.  Only Excel's formula cell type
-                # (including openpyxl ArrayFormula objects) enters this path.
-                if cell.data_type == "f":
-                    yield worksheet, cell
+        # These are normal, fully loaded worksheets. Inspect stored cells,
+        # rather than constructing the rectangular formatted UsedRange.
+        for cell in worksheet._cells.values():
+            if cell.data_type == "f":
+                yield worksheet, cell
+
+
+def _scan_sheet_formulas(root: Any, sheet_part: str) -> None:
+    """Validate shared groups before openpyxl expands their relative references."""
+    groups: dict[str, list[tuple[str, Any]]] = {}
+    coordinates: set[str] = set()
+    for cell in root.iter():
+        if cell.tag.rsplit("}", 1)[-1] != "c":
+            continue
+        coordinate = cell.get("r", "")
+        formula_nodes = [node for node in cell if node.tag.rsplit("}", 1)[-1] == "f"]
+        if not formula_nodes:
+            continue
+        location = f"{sheet_part}!{coordinate or '<missing coordinate>'}"
+        if not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", coordinate):
+            raise FormulaValueError(f"Invalid formula coordinate at {location}")
+        row, column = coordinate_to_tuple(coordinate)
+        if row > 1048576 or column > 16384 or coordinate in coordinates or len(formula_nodes) != 1:
+            raise FormulaValueError(f"Invalid or duplicate formula cell at {location}")
+        coordinates.add(coordinate)
+        formula = formula_nodes[0]
+        kind = formula.get("t", "normal").lower()
+        if kind == "shared":
+            index = formula.get("si", "")
+            if not re.fullmatch(r"[0-9]+", index) or int(index) > 4294967295:
+                raise FormulaValueError(f"Invalid shared formula index at {location}")
+            groups.setdefault(index, []).append((coordinate, formula))
+        elif kind != "normal" or "ref" in formula.attrib or "si" in formula.attrib:
+            raise FormulaValueError(f"Unsupported {kind} formula at {location}")
+        elif not formula.text:
+            raise FormulaValueError(f"Formula has no body at {location}")
+
+    for index, members in groups.items():
+        masters = [(coordinate, formula) for coordinate, formula in members if formula.text]
+        if len(masters) != 1:
+            raise FormulaValueError(f"Shared formula group {index} in {sheet_part} must have exactly one master")
+        origin, master = masters[0]
+        location = f"{sheet_part}!{origin}"
+        # openpyxl translates followers as it reads them. A missing or late
+        # master would otherwise silently turn their bodies into '='.
+        if members[0][0] != origin:
+            raise FormulaValueError(f"Shared formula master follows its members at {location}")
+        reference = master.get("ref", "")
+        if not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*(?::[A-Z]{1,3}[1-9][0-9]*)?", reference):
+            raise FormulaValueError(f"Invalid shared formula range at {location}: {reference}")
+        min_col, min_row, max_col, max_row = range_boundaries(reference)
+        if not (1 <= min_col <= max_col <= 16384 and 1 <= min_row <= max_row <= 1048576):
+            raise FormulaValueError(f"Invalid shared formula range at {location}: {reference}")
+        try:
+            translator = Translator("=" + master.text, origin=origin)
+            for coordinate, formula in members:
+                row, column = coordinate_to_tuple(coordinate)
+                if not (min_col <= column <= max_col and min_row <= row <= max_row):
+                    raise FormulaValueError(f"Shared formula member outside {reference} at {sheet_part}!{coordinate}")
+                if coordinate != origin and "ref" in formula.attrib:
+                    raise FormulaValueError(f"Shared formula follower declares a range at {sheet_part}!{coordinate}")
+                translator.translate_formula(coordinate)
+        except FormulaValueError:
+            raise
+        except Exception as exc:
+            raise FormulaValueError(f"Cannot expand shared formula at {location}") from exc
 
 
 def _scan_package(path: Path) -> None:
@@ -168,30 +228,22 @@ def _scan_package(path: Path) -> None:
                     # or connection, avoiding false positives for user URLs.
                     if b"externallink" in lowered or b"externalconnection" in lowered:
                         raise FormulaValueError(f"Workbook contains an external relationship: {name}")
-            # Shared and array formulas are represented by attributes that are
-            # not faithfully round-trippable through openpyxl.  Refuse the
-            # whole workbook rather than replacing only the anchor and leaving
-            # a silently wrong spill/shared range.
+            # Shared formulas are ordinary formulas compressed into a master
+            # and relative followers. Validate the groups before openpyxl
+            # expands them; array/data-table ranges still require separate
+            # semantics and remain unsupported.
             for name in names:
                 if not name.startswith("xl/worksheets/") or not name.endswith(".xml"):
                     continue
                 root = ElementTree.fromstring(archive.read(archive_names[name]))
-                for formula_node in root.iter():
-                    if formula_node.tag.rsplit("}", 1)[-1] != "f":
-                        continue
-                    attrs = {key.rsplit("}", 1)[-1]: value for key, value in formula_node.attrib.items()}
-                    kind = attrs.get("t", "").lower()
-                    if kind in {"shared", "array", "datatable"} or "ref" in attrs:
-                        raise FormulaValueError(f"Unsupported shared/array formula in {name}")
-                    if formula_node.text is None and kind:
-                        raise FormulaValueError(f"Unsupported formula without body in {name}")
+                _scan_sheet_formulas(root, name)
     except ElementTree.ParseError as exc:
         raise FormulaValueError(f"Cannot inspect workbook XML safely: {path}") from exc
     except (OSError, zipfile.BadZipFile) as exc:
         raise FormulaValueError(f"Cannot inspect workbook package: {path}") from exc
 
 
-def _scan_formulas(workbook: Any) -> list[tuple[str, str, str]]:
+def _scan_formulas(workbook: Any, *, allow_errors: bool = False) -> list[tuple[str, str, str]]:
     formulas: list[tuple[str, str, str]] = []
     for worksheet, cell in _iter_formula_cells(workbook):
         formula = cell.value.text if hasattr(cell.value, "text") else cell.value
@@ -209,7 +261,7 @@ def _scan_formulas(workbook: Any) -> list[tuple[str, str, str]]:
             raise FormulaValueError(f"Dynamic/implicit-array formula at {worksheet.title}!{cell.coordinate}")
         if any(re.search(rf"(?<![A-Z0-9_.]){re.escape(name)}\s*\(", upper) for name in _VOLATILE_FUNCTIONS):
             raise FormulaValueError(f"Volatile formula is not reproducible at {worksheet.title}!{cell.coordinate}")
-        if "#REF!" in upper:
+        if "#REF!" in upper and not allow_errors:
             raise FormulaValueError(f"Broken formula reference at {worksheet.title}!{cell.coordinate}")
         for match in _FUNCTION_CALL_RE.finditer(scan_formula):
             name = match.group(1).upper()
@@ -218,11 +270,11 @@ def _scan_formulas(workbook: Any) -> list[tuple[str, str, str]]:
             if name.startswith("_XLFN.") or name.startswith("_XLWS.") or name not in _BUILTIN_FUNCTIONS:
                 raise FormulaValueError(f"Unknown/UDF formula function {name} at {worksheet.title}!{cell.coordinate}")
         formulas.append((worksheet.title, cell.coordinate, formula))
-    _detect_formula_cycles(workbook)
+    _detect_formula_cycles(workbook, allow_errors=allow_errors)
     return formulas
 
 
-def _detect_formula_cycles(workbook: Any) -> None:
+def _detect_formula_cycles(workbook: Any, *, allow_errors: bool = False) -> None:
     """Fail closed on cycles or references we cannot statically account for."""
     nodes = {(ws.title, cell.coordinate): cell for ws, cell in _iter_formula_cells(workbook)}
     graph = {}
@@ -245,6 +297,11 @@ def _detect_formula_cycles(workbook: Any) -> None:
             if token.type != "OPERAND" or token.subtype != "RANGE":
                 continue
             raw = token.value.strip()
+            if allow_errors and "#REF!" in raw.upper():
+                # A deleted reference (including Sheet!#REF!) has no target
+                # node. Excel still computes and records its typed error;
+                # other dependencies and cycles remain fully checked.
+                continue
             if "!" in raw:
                 sheet_text, raw_ref = raw.rsplit("!", 1)
                 if ":" in sheet_text:
@@ -306,7 +363,7 @@ def _detect_formula_cycles(workbook: Any) -> None:
         raise FormulaValueError(f"Circular formula dependency detected at {node[0]}!{node[1]}")
 
 
-def _scan_defined_names(workbook: Any) -> None:
+def _scan_defined_names(workbook: Any, *, allow_errors: bool = False) -> None:
     """Reject names which smuggle an external link or executable reference."""
     all_names = [*workbook.defined_names.values(),
                  *(name for ws in workbook.worksheets for name in ws.defined_names.values())]
@@ -314,7 +371,7 @@ def _scan_defined_names(workbook: Any) -> None:
         text = str(getattr(defined_name, "attr_text", "") or "")
         scan_text = _without_string_literals(text)
         scan_upper = scan_text.upper()
-        if _EXTERNAL_REF_RE.search(scan_text) or re.search(r"\bDDE\s*\(", scan_text, re.IGNORECASE) or "#REF!" in scan_upper:
+        if _EXTERNAL_REF_RE.search(scan_text) or re.search(r"\bDDE\s*\(", scan_text, re.IGNORECASE) or ("#REF!" in scan_upper and not allow_errors):
             name = getattr(defined_name, "name", "<unnamed>")
             raise FormulaValueError(f"Defined name contains an unsafe reference: {name}")
         name = getattr(defined_name, "name", "<unnamed>")
@@ -360,6 +417,7 @@ def _cleanup_excel_process(state_path: Path) -> None:
 
 
 def _run_excel_recalculate(source: Path, result: Path, timeout_seconds: int) -> None:
+    from prepare_progress import checkpoint, cancellable, PreparationCancelled
     script = Path(__file__).with_name("recalculate_workbook.ps1")
     if not script.is_file():
         raise FormulaValueError(f"Excel recalculation helper is missing: {script}")
@@ -373,9 +431,37 @@ def _run_excel_recalculate(source: Path, result: Path, timeout_seconds: int) -> 
         command = [_powershell_executable(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                    "-File", str(script), "-ParametersPath", str(params_path)]
         try:
-            completed = subprocess.run(command, capture_output=True, text=True,
-                                       encoding="utf-8", errors="replace",
-                                       timeout=max(1, int(timeout_seconds) + 20), check=False)
+            if not cancellable():
+                completed = subprocess.run(command, capture_output=True, text=True,
+                                           encoding="utf-8", errors="replace",
+                                           timeout=max(1, int(timeout_seconds) + 20), check=False)
+            else:
+                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           text=True, encoding='utf-8', errors='replace')
+                deadline = time.monotonic() + max(1, int(timeout_seconds) + 20)
+                try:
+                    while True:
+                        checkpoint()
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, timeout_seconds)
+                        try:
+                            stdout, stderr = process.communicate(timeout=min(.25, remaining))
+                            completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                            break
+                        except subprocess.TimeoutExpired:
+                            continue
+                except BaseException:
+                    # Cleanup before terminating the harness; its PID/start time
+                    # ownership record excludes Excel instances opened by users.
+                    _cleanup_excel_process(state_path)
+                    process.terminate()
+                    try:
+                        process.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.communicate()
+                    raise
         except subprocess.TimeoutExpired as exc:
             _cleanup_excel_process(state_path)
             raise FormulaValueError("Excel recalculation exceeded the hard timeout") from exc
@@ -463,7 +549,7 @@ def _formula_cache_presence(path: Path) -> dict[tuple[str, str], bool]:
 
 
 def _materialize_from_result(source: Path, calculated: Path, output: Path,
-                             formula_keys: set[tuple[str, str]]) -> Path:
+                             formula_keys: set[tuple[str, str]], *, allow_errors: bool = False) -> Path:
     keep_vba = source.suffix.lower() == ".xlsm"
     try:
         original = load_workbook(source, data_only=False, keep_links=True, keep_vba=keep_vba)
@@ -478,6 +564,14 @@ def _materialize_from_result(source: Path, calculated: Path, output: Path,
             source_cell = original[sheet_name][coordinate]
             result_cell = values[sheet_name][coordinate]
             value = result_cell.value
+            if result_cell.data_type == "e" and allow_errors:
+                if not isinstance(value, str) or value not in _ERROR_VALUES:
+                    raise FormulaValueError(f"Invalid Excel error result at {sheet_name}!{coordinate}: {value}")
+                # Historical errors are typed unknowns, never literal text or
+                # invented numeric results. Consumers must require review.
+                source_cell.value = value
+                source_cell.data_type = "e"
+                continue
             _validate_result(value, sheet_name, coordinate, result_cell.data_type)
             # A missing <v> cache is different from a legitimate cached empty
             # string.  Excel's data_only reader returns None in both unusual
@@ -513,7 +607,7 @@ def _materialize_from_result(source: Path, calculated: Path, output: Path,
     return output
 
 
-def materialize_values(source_path: Path | str, output_path: Path | str) -> Path:
+def materialize_values(source_path: Path | str, output_path: Path | str, *, allow_errors: bool = False) -> Path:
     """Calculate every formula in ``source_path`` and emit a literal snapshot.
 
     The source is never opened by Excel and is never modified.  A workbook with
@@ -537,8 +631,8 @@ def materialize_values(source_path: Path | str, output_path: Path | str) -> Path
     except Exception as exc:
         raise FormulaValueError(f"Cannot open workbook for formula inspection: {exc}") from exc
     try:
-        formulas = _scan_formulas(workbook)
-        _scan_defined_names(workbook)
+        formulas = _scan_formulas(workbook, allow_errors=allow_errors)
+        _scan_defined_names(workbook, allow_errors=allow_errors)
     finally:
         workbook.close()
     if not formulas:
@@ -557,7 +651,8 @@ def materialize_values(source_path: Path | str, output_path: Path | str) -> Path
         shutil.copy2(source, temporary_source)
         _run_excel_recalculate(temporary_source, temporary_result, timeout_seconds)
         return _materialize_from_result(source, temporary_result, output,
-                                        {(sheet, coordinate) for sheet, coordinate, _ in formulas})
+                                        {(sheet, coordinate) for sheet, coordinate, _ in formulas},
+                                        allow_errors=allow_errors)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
