@@ -3,25 +3,32 @@
   "package": "@kevlns/xlmerge",
   "command": "xlmerge",
   "bin": "xlmerge",
-  "description": "Formula-aware visual resolver for Git merge conflicts in .xlsx/.xlsm planning tables: three-way sheet/row/cell diff, local UI, atomic write-back and commit.",
-  "platforms": ["darwin", "linux", "win32"],
+  "description": "在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。",
+  "platforms": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
   "runtime": {
     "node": ">=16",
     "python": ">=3.9",
-    "pythonDependencies": ["openpyxl==3.1.5", "bottle==0.13.4"]
+    "pythonDependencies": [
+      "openpyxl==3.1.5",
+      "bottle==0.13.4"
+    ]
   },
   "environment": [
     {
       "name": "XLMERGE_PYTHON",
-      "description": "Python interpreter path; highest precedence, bypasses automatic discovery."
+      "description": "Python 解释器路径，优先于自动查找。"
     },
     {
       "name": "XLMERGE_VENV",
-      "description": "Directory for the on-demand user-level virtualenv (default: ~/.xlmerge/venv)."
+      "description": "按需创建的用户虚拟环境目录，默认 ~/.xlmerge/venv。"
     },
     {
       "name": "XLMERGE_EXCEL_TIMEOUT_SECONDS",
-      "description": "Hard timeout for isolated Excel formula recalculation (default: 120 seconds per workbook)."
+      "description": "Excel 隔离重算单个工作簿的硬超时，默认 120 秒。"
     }
   ],
   "agent": {
@@ -29,165 +36,212 @@
     "globalOptions": [
       {
         "flags": "--repo <path>",
-        "description": "Git repository (default: current directory; searches upward for the Git root)."
+        "description": "Git 仓库目录，默认当前目录并向上查找仓库根。"
       },
       {
         "flags": "--runtime-dir <dir>",
-        "description": "Optional directory for extracted Git stage workbooks and manifest (default: system temp). Used by prepare, resolve and launch."
+        "description": "Git 三方工作簿与清单的暂存目录，默认系统临时目录，供 prepare、resolve、launch 使用。"
       }
     ],
     "commands": [
       {
-        "path": ["detect"],
+        "path": [
+          "detect"
+        ],
         "usage": "xlmerge --repo <repo> detect",
-        "description": "List unresolved .xlsx/.xlsm files in the repository.",
+        "description": "列出仓库中未解决的 .xlsx/.xlsm 冲突。",
         "arguments": [],
         "options": [],
         "output": {
           "format": "json",
-          "description": "Object with ok, repo, count, reviewCount, autoTheirs and conflicts (array of {path, stages})."
+          "description": "返回 ok、repo、count、reviewCount、autoTheirs 和 conflicts（path、stages）。"
         },
         "exitCodes": {
-          "0": "success",
-          "1": "error (e.g. not a Git repository)",
-          "2": "usage error"
+          "0": "成功。",
+          "1": "执行失败，例如目标不是 Git 仓库。",
+          "2": "用法错误。"
         },
-        "safety": ["read-only", "no-worktree-modification"]
+        "safety": [
+          "read-only",
+          "no-worktree-modification"
+        ]
       },
       {
-        "path": ["filter", "add"],
+        "path": [
+          "filter",
+          "add"
+        ],
         "usage": "xlmerge --repo <repo> filter add <path>",
-        "description": "Add a repository-scoped case-insensitive workbook path-suffix filter whose conflicts are adopted byte-for-byte from Git stage 3.",
+        "description": "添加不区分大小写的工作簿路径后缀过滤项；匹配文件逐字节采用 Git stage 3。",
         "arguments": [
           {
             "name": "path",
             "required": true,
-            "description": "Relative .xlsx/.xlsm path suffix to adopt from Git stage 3."
+            "description": "需采用 Git stage 3 的 .xlsx/.xlsm 相对路径后缀。"
           }
         ],
         "options": [],
         "output": {
           "format": "json",
-          "description": "Object with ok, repo, config, filter, added and the complete filters list. Writes <repo>/.xlmerge.json."
+          "description": "返回 ok、repo、config、filter、added 和完整 filters，写入 <repo>/.xlmerge.json。"
         },
         "exitCodes": {
-          "0": "success (including an already-present filter)",
-          "1": "invalid repository, filter path or .xlmerge.json",
-          "2": "usage error"
+          "0": "成功，包含过滤项已存在的情况。",
+          "1": "仓库、过滤路径或 .xlmerge.json 无效。",
+          "2": "用法错误。"
         },
-        "safety": ["writes-worktree", "no-commit"]
+        "safety": [
+          "writes-worktree",
+          "no-commit"
+        ]
       },
       {
-        "path": ["prepare"],
+        "path": [
+          "prepare"
+        ],
         "usage": "xlmerge --repo <repo> prepare [--path <file>]",
-        "description": "Build a sheet-aware manifest; configured auto-theirs matches skip extraction and cell analysis.",
+        "description": "生成按工作表组织的清单；命中整表过滤的文件跳过单元格分析。",
         "arguments": [],
         "options": [
           {
             "flags": "--path <file>",
-            "description": "Only prepare this repository-relative .xlsx/.xlsm path."
+            "description": "仅准备指定仓库相对路径的 .xlsx/.xlsm 文件。"
           }
         ],
         "output": {
           "format": "json",
-          "description": "Object with ok and manifest (absolute path to the manifest JSON)."
+          "description": "返回 ok 和清单 JSON 的绝对路径 manifest。"
         },
         "exitCodes": {
-          "0": "success",
-          "1": "error (no conflicts found, not a Git repository, git failure)",
-          "2": "usage error"
+          "0": "成功。",
+          "1": "无冲突、仓库无效或 Git 执行失败。",
+          "2": "用法错误。"
         },
-        "safety": ["writes-runtime-dir", "no-worktree-modification", "no-commit"]
+        "safety": [
+          "writes-runtime-dir",
+          "no-worktree-modification",
+          "no-commit"
+        ]
       },
       {
-        "path": ["resolve"],
+        "path": [
+          "resolve"
+        ],
         "usage": "xlmerge --repo <repo> resolve [--path <file>] [--no-browser]",
-        "description": "Prepare conflicts and serve the local visual resolver in the foreground (blocking).",
+        "description": "准备冲突并以前台阻塞模式启动本地审阅界面。",
         "arguments": [],
         "options": [
           {
             "flags": "--path <file>",
-            "description": "Only resolve this repository-relative .xlsx/.xlsm path."
+            "description": "仅处理指定仓库相对路径的 .xlsx/.xlsm 文件。"
           },
           {
             "flags": "--no-browser",
-            "description": "Print the URL instead of opening a browser."
+            "description": "只输出地址，不打开浏览器。"
           }
         ],
         "output": {
           "format": "stdout",
-          "description": "Prints MERGE_SERVER_URL=http://127.0.0.1:<port> for review conflicts; an all-filtered batch instead returns JSON after stage-3 write-back and commit."
+          "description": "审阅模式输出 MERGE_SERVER_URL=http://127.0.0.1:<port>；全量命中过滤时直接写回 stage 3 并提交，返回 JSON。"
         },
         "exitCodes": {
-          "0": "success (resolution applied automatically or via UI; server shuts down after UI write-back)",
-          "1": "error (prepare failure or server stopped before a resolution was applied)",
-          "2": "usage error"
+          "0": "已应用解决结果：自动完成或通过界面写回，随后关闭服务。",
+          "1": "准备失败，或应用解决结果前服务已停止。",
+          "2": "用法错误。"
         },
-        "safety": ["blocking", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree", "commits-by-default", "writes-worktree-via-ui", "commits-by-default-via-ui"]
+        "safety": [
+          "blocking",
+          "binds-loopback",
+          "opens-browser-by-default",
+          "no-push",
+          "writes-runtime-dir",
+          "writes-worktree",
+          "commits-by-default",
+          "writes-worktree-via-ui",
+          "commits-by-default-via-ui"
+        ]
       },
       {
-        "path": ["launch"],
+        "path": [
+          "launch"
+        ],
         "usage": "xlmerge --repo <repo> launch [--path <file>] [--no-browser]",
-        "description": "Prepare conflicts, start the visual resolver in the background and return its URL.",
+        "description": "准备冲突，在后台启动审阅界面并返回地址。",
         "arguments": [],
         "options": [
           {
             "flags": "--path <file>",
-            "description": "Only resolve this repository-relative .xlsx/.xlsm path."
+            "description": "仅处理指定仓库相对路径的 .xlsx/.xlsm 文件。"
           },
           {
             "flags": "--no-browser",
-            "description": "Start the server without opening a browser."
+            "description": "启动服务但不打开浏览器。"
           }
         ],
         "output": {
           "format": "json",
-          "description": "For review conflicts: object with ok, pid, url, manifest and log paths. For an all-filtered batch: url is null and autoResolved/steps report automatic stage-3 write-back and commit."
+          "description": "审阅模式返回 ok、pid、url、manifest 和日志路径；全量过滤时 url 为 null，autoResolved 和 steps 记录写回与提交。"
         },
         "exitCodes": {
-          "0": "success",
-          "1": "error (prepare failure or server did not report a URL within 15 seconds)",
-          "2": "usage error"
+          "0": "成功。",
+          "1": "准备失败，或服务未在 15 秒内报告地址。",
+          "2": "用法错误。"
         },
-        "safety": ["starts-background-server", "binds-loopback", "opens-browser-by-default", "no-push", "writes-runtime-dir", "writes-worktree", "commits-by-default", "writes-worktree-via-ui", "commits-by-default-via-ui"]
+        "safety": [
+          "starts-background-server",
+          "binds-loopback",
+          "opens-browser-by-default",
+          "no-push",
+          "writes-runtime-dir",
+          "writes-worktree",
+          "commits-by-default",
+          "writes-worktree-via-ui",
+          "commits-by-default-via-ui"
+        ]
       },
       {
-        "path": ["apply"],
+        "path": [
+          "apply"
+        ],
         "usage": "xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.json> [--no-commit] [--push] [--message <text>]",
-        "description": "Write back decisions from a decisions JSON without launching the UI.",
+        "description": "按决策 JSON 写回，不启动界面。",
         "arguments": [],
         "options": [
           {
             "flags": "--manifest <file>",
-            "description": "Required. Manifest JSON produced by prepare."
+            "description": "prepare 生成的清单 JSON，必填。"
           },
           {
             "flags": "--decisions <file>",
-            "description": "Required. Decisions JSON with per-file per-sheet cell, row, column, rename and macro choices keyed by logical IDs."
+            "description": "按逻辑 ID 指定文件、工作表、单元格、行列、重命名和宏选择的决策 JSON，必填。"
           },
           {
             "flags": "--no-commit",
-            "description": "Skip git add/commit after writing merged workbooks."
+            "description": "写回后不执行 git add/commit。"
           },
           {
             "flags": "--push",
-            "description": "Push after committing (off by default)."
+            "description": "提交后推送，默认关闭。"
           },
           {
             "flags": "--message <text>",
-            "description": "Override the auto-generated structured commit message."
+            "description": "指定提交说明。"
           }
         ],
         "output": {
           "format": "json",
-          "description": "Result object with success and summary of written files and commit."
+          "description": "返回 success 与写回文件、提交摘要。"
         },
         "exitCodes": {
-          "0": "success (including with --no-commit)",
-          "1": "error (invalid or incomplete decisions, git/OS failure)",
-          "2": "usage error"
+          "0": "成功，包含指定 --no-commit 的情况。",
+          "1": "决策无效、不完整或 Git/系统操作失败。",
+          "2": "用法错误。"
         },
-        "safety": ["writes-worktree", "commits-by-default", "pushes-only-with-flag"]
+        "safety": [
+          "writes-worktree",
+          "commits-by-default",
+          "pushes-only-with-flag"
+        ]
       }
     ]
   }

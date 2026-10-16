@@ -1,8 +1,5 @@
 name: publish
 
-# 首次发布需在本地使用 2FA OTP 完成。包创建后，在 npm 包设置中将
-# GitHub Actions Trusted Publisher 绑定到本仓库的 publish.yml；后续推送
-# v* 标签时使用短期 OIDC 凭证发布，不保存长期 NPM_TOKEN。
 on:
   push:
     tags: ["v*"]
@@ -22,6 +19,8 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - name: Check documentation
+        run: npm run docs:style
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

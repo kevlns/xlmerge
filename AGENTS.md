@@ -1,4 +1,19 @@
-# xlmerge Agent 使用规范
+# Vant 表格合并工具 Agent 规范
+
+## 定位
+
+在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。
+
+## 调用流程
+
+```sh
+xlmerge --repo <仓库目录> detect
+xlmerge --repo <仓库目录> launch
+```
+
+首次调用前读取本规范，使用命令帮助或插件清单核对参数和执行范围。
+
+## 调用规范
 
 > 三方工作簿会在结构对齐前分别计算并固化公式最终值；apply 对来源、快照和工作树做完整预检，并以可回滚批次执行写回（版本以 package.json / npm 包为准）。
 
@@ -14,11 +29,11 @@ xlmerge --repo <repo> launch
 
 `npx` 等价：`npx --package @kevlns/xlmerge@latest xlmerge --repo <repo> detect`。
 
-## 何时使用
+### 何时使用
 
 用户要求处理策划表冲突、配置表冲突、xlsx/xlsm merge conflict 或多 Sheet 冲突，且 Git 仓库存在未合并的 `.xlsx`/`.xlsm` 时立即使用。这是一个**命令路由任务，不是表格分析任务**。
 
-## 使用规范（Agent 必须遵守）
+### 使用规范（Agent 必须遵守）
 
 1. 用户确认要处理冲突后，**只做快速连贯的检测与启动**：`detect` → `count > 0` 时 `launch`。`reviewCount > 0` 时把返回的 `url` 告诉用户，然后停止分析，等待用户在页面完成选择；`reviewCount == 0` 时 `launch` 会直接采用过滤项的远端版本并提交，报告其 JSON 结果；`count == 0` 时报告没有未解决冲突并结束。
 2. **不额外审查冲突情况**：不检查工作簿 Cell、不自行做三方 diff、不总结冲突内容、不读取 base/ours/theirs；这些复杂度由工具内部流程处理。
@@ -27,7 +42,7 @@ xlmerge --repo <repo> launch
 5. `apply` 默认写回并 `git commit`；`--no-commit` 仅测试决策时使用；`--push` 仅用户明确要求推送时使用，正常流程不自动 push。
 6. 只处理单个文件时使用 `launch --path <仓库相对路径>`；多文件不按文件循环调用 `launch --path`，一次性同批次页面展示。
 
-## 最高优先级快速流程
+### 最高优先级快速流程
 
 用户确认要处理冲突后，只做以下动作：
 
@@ -47,7 +62,7 @@ xlmerge --repo <repo> launch
 
 如果 `count` 为 `0`，报告没有未解决的 `.xlsx` / `.xlsm` 冲突并结束。
 
-## 仓库过滤列表
+### 仓库过滤列表
 
 过滤列表默认为空，仅在用户明确要求某类生成表始终采用远端整表时添加：
 
@@ -59,7 +74,7 @@ xlmerge --repo <repo> filter add locale/Key.xlsx
 
 命中过滤项的冲突文件不进入结构化分析或 UI，而是逐字节写入 Git index stage 3（theirs）。若 stage 3 不存在则安全失败；混合批次会在用户确认人工冲突后，与 UI 处理结果一起写回并提交。
 
-## 快速流程禁止事项
+### 快速流程禁止事项
 
 - 不调用通用 `xlsx` Skill、Excel API 或临时 Python 读取 base/ours/theirs。
 - 不运行 `prepare` 后读取 manifest，也不枚举或总结 Cell/Sheet 差异。
@@ -71,7 +86,7 @@ xlmerge --repo <repo> filter add locale/Key.xlsx
 
 只处理单个文件时，仍然直接使用 `launch --path <仓库相对路径>`。
 
-## 程序负责的内部流程
+### 程序负责的内部流程
 
 以下内容由解析器自动完成，用于理解边界，不要由模型重复实现：
 
@@ -106,7 +121,7 @@ git -C <repo> log -1 --oneline
 
 第一条必须无输出；随后报告处理的文件、Sheet、人工选择数量和 commit 结果。
 
-## 非交互入口
+### 非交互入口
 
 仅在自动化测试或用户已提供明确决策 JSON 时使用 prepare/apply；不要用于查看 diff。决策必须同时包含文件、Sheet 和 Cell（Cell 优先使用 manifest 的稳定逻辑 ID）：
 
@@ -117,7 +132,7 @@ xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.js
 
 测试决策但不 commit 时加 `--no-commit`；只有用户明确要求推送时加 `--push`。
 
-## 边界与失败处理
+### 边界与失败处理
 
 - 只处理 Git 未合并状态中的 `.xlsx` / `.xlsm`；不处理普通修改。
 - 文件级 delete/modify 冲突缺少完整双方工作簿时，解析器停止并报告；不要猜测删除还是保留。
@@ -130,13 +145,25 @@ xlmerge --repo <repo> apply --manifest <manifest.json> --decisions <decisions.js
 - 不直接修改 XLSX 内部 XML，不使用未经本次完整计算验证的旧公式缓存冒充最终值。
 - 运行时提取文件和 manifest 默认放系统临时目录，不写入业务仓库。
 
-## 环境
+### 环境
 
 npm 包通过 `bin/xlmerge.js` 启动：自动检测系统 Python（≥3.9，`XLMERGE_PYTHON` 可直接指定；否则按平台探测 `python3` / `python`，Windows 追加 `py -3`）；若缺 `openpyxl` / `bottle` 依赖，则在 `~/.xlmerge/venv` 创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。不含公式的工作簿保持跨平台；含公式时必须在 Windows 上安装桌面版 Excel，解析器只让 Excel 打开隔离的临时副本，并拒绝外链、UDF/VBA、volatile、循环引用、动态数组等不可安全复现的公式语义。`XLMERGE_EXCEL_TIMEOUT_SECONDS` 可覆盖每个工作簿默认 120 秒的重算硬超时。正常流程不检查环境；仅入口明确报环境错误时诊断。
 
-## 验证
+### 验证
 
 ```bash
 cd <npm 包目录>
 python -m unittest discover -s python/tests -v
 ```
+
+## 结果验证
+
+核对原始错误、任务身份、停止状态及实际产物。只报告已经完成的验证，模拟测试与真实执行分别说明。
+
+## 参考资料
+
+[使用说明](README.md) · [文档规范](docs/documentation.md) · v-cli.plugin.json
+
+## 许可与版权
+
+MIT。Copyright © 2026 Vant。

@@ -1,7 +1,7 @@
 {
   "name": "@kevlns/xlmerge",
-  "version": "2.0.2",
-  "description": "Formula-aware visual resolver for unresolved Git merge conflicts in .xlsx/.xlsm workbooks: three-way sheet/row/cell diff, local UI, atomic write-back and commit.",
+  "version": "2.0.3",
+  "description": "在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。",
   "bin": {
     "xlmerge": "bin/xlmerge.js"
   },
@@ -10,7 +10,8 @@
     "python/xlsx_merge_engine/",
     "python/xlsx_resolver/",
     "v-cli.plugin.json",
-    "AGENTS.md"
+    "AGENTS.md",
+    "docs/"
   ],
   "vCli": {
     "manifest": "v-cli.plugin.json"
@@ -18,7 +19,8 @@
   "scripts": {
     "test": "node bin/xlmerge.js --selfcheck",
     "test:python": "python -m unittest discover -s python/tests -v",
-    "check:manifest": "python -m unittest discover -s python/tests -p test_v_cli_plugin_manifest.py -v"
+    "check:manifest": "python -m unittest discover -s python/tests -p test_v_cli_plugin_manifest.py -v",
+    "docs:style": "node scripts/check-documentation.mjs"
   },
   "repository": {
     "type": "git",
@@ -28,7 +30,7 @@
   "bugs": {
     "url": "https://github.com/kevlns/xlmerge/issues"
   },
-  "author": "kevlns <936277610@qq.com>",
+  "author": "Vant",
   "engines": {
     "node": ">=16"
   },

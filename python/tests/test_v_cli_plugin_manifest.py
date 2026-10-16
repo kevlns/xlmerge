@@ -191,7 +191,7 @@ class VCliPluginManifestTests(unittest.TestCase):
         self.assertEqual(manifest_commands[("filter", "add")]["arguments"], [{
             "name": "path",
             "required": True,
-            "description": "Relative .xlsx/.xlsm path suffix to adopt from Git stage 3.",
+            "description": "需采用 Git stage 3 的 .xlsx/.xlsm 相对路径后缀。",
         }])
 
         # global option drift check
@@ -229,8 +229,8 @@ class VCliPluginManifestTests(unittest.TestCase):
         self.assertEqual(commands[("resolve",)]["output"]["format"], "stdout")
         self.assertIn("MERGE_SERVER_URL", commands[("resolve",)]["output"]["description"])
         # resolve exit 0 means a resolution was applied, not merely a clean stop
-        self.assertIn("resolution applied", commands[("resolve",)]["exitCodes"]["0"])
-        self.assertIn("before a resolution was applied", commands[("resolve",)]["exitCodes"]["1"])
+        self.assertIn("已应用解决结果", commands[("resolve",)]["exitCodes"]["0"])
+        self.assertIn("应用解决结果前", commands[("resolve",)]["exitCodes"]["1"])
 
     def test_shim_python_dependencies_match_manifest_runtime(self):
         # bin/xlmerge.js 固定依赖必须与 manifest runtime.pythonDependencies 逐项一致

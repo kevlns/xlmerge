@@ -1,23 +1,31 @@
-<div align="center">
+# Vant 表格合并工具
 
-<img src="https://raw.githubusercontent.com/kevlns/xlmerge/main/logo.png" alt="xlmerge logo" width="320" />
+`@kevlns/xlmerge`
 
-# xlmerge
+## 功能
 
-**解决 Git 仓库中 `.xlsx` / `.xlsm` 策划配置表未合并冲突的可视化工具。**
+在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。
 
-[![npm version](https://img.shields.io/npm/v/%40kevlns%2Fxlmerge?style=flat-square&color=cb3837)](https://www.npmjs.com/package/@kevlns/xlmerge)
-[![npm downloads](https://img.shields.io/npm/dm/%40kevlns%2Fxlmerge?style=flat-square&color=4c8bf5)](https://www.npmjs.com/package/@kevlns/xlmerge)
-[![CI](https://img.shields.io/github/actions/workflow/status/kevlns/xlmerge/test.yml?branch=main&style=flat-square&label=CI)](https://github.com/kevlns/xlmerge/actions/workflows/test.yml)
-[![license](https://img.shields.io/github/license/kevlns/xlmerge?style=flat-square&color=2e8b57)](./LICENSE)
+## 环境要求
 
-[Getting started](#getting-started) · [Usage](#usage) · [Development](#development) · [Package family](#package-family)
+Node.js 16 及以上、Python 3.9 及以上；包含公式的工作簿需要 Windows 桌面版 Excel 生成可靠的计算快照。
 
-</div>
+## 安装
 
----
+```sh
+npm install -g @kevlns/xlmerge
+```
 
-## Why xlmerge?
+## 快速开始
+
+```sh
+xlmerge --repo <仓库目录> detect
+xlmerge --repo <仓库目录> launch
+```
+
+## 使用说明
+
+### 功能说明
 
 Git 对二进制 `.xlsx`/`.xlsm` 只会整文件冲突，无法像文本一样逐行合并。xlmerge 用**公式最终值快照 + 三方结构化差异引擎 + 本地可视化 UI**把这件事变得可控：自动提取 Git index 的 base/ours/theirs 三方版本，按 Sheet、逻辑行、逻辑列、Cell 四级计算差异，浏览器中逐 Cell 选择本地/远端版本，最终原子写回工作簿并生成结构化 commit。
 
@@ -29,45 +37,7 @@ Git 对二进制 `.xlsx`/`.xlsm` 只会整文件冲突，无法像文本一样�
 - **可配置整表过滤** - 仓库可把生成表加入过滤列表；命中时直接采用 Git stage 3 的远端原始文件
 - **默认不越权** - 服务只监听 `127.0.0.1`，不自动 push
 
-## Getting started
-
-### Install
-
-```bash
-npm install -g @kevlns/xlmerge
-
-# 或直接从 GitHub 仓库安装开发版本
-npm install -g git+https://github.com/kevlns/xlmerge.git
-```
-
-要求：Node.js >= 16，系统 Python >= 3.9。首次运行若缺少依赖，会在 `~/.xlmerge/venv` 自动创建用户级 venv 并安装 `openpyxl==3.1.5`、`bottle==0.13.4`。不含公式的工作簿保持跨平台；工作簿含公式时，安全的最终值快照需要 Windows 桌面版 Excel，缺失时会明确失败而不会采用旧缓存。
-
-支持 Excel 共享公式：先校验每个工作表内的共享组、主公式和引用范围，再展开各单元格的相对/绝对引用，执行公式安全检查并由 Excel 重算隔离副本。缺少或重复主公式、越界成员及不可安全展开的公式会明确失败；数组公式和数据表公式仍不支持。源工作簿保持不变，差异比较使用本次重算得到的最终值快照。
-
-计算完成后直接校验 Excel 保存的公式缓存类型、错误和缺失结果，不再通过 COM 逐单元格遍历格式范围。三方版本的计算错误保留原公式、错误与位置，作为未知值进入界面；必须选择有效来源，错误涉及无法可靠确认的记录身份、表头或行列结构时需选择整个 Sheet。双方同一记录、同一字段都报错，且有一致的显式基础类型时，数值自动替换为 0、string 为 `""`、bool 为 false；ID、引用、约束字段、未知类型及重复 ID 不自动替换。替换只发生在审阅快照，原始表不变，界面与提交信息记录替代值。未处理错误不能写入结果。外链、宏/UDF、volatile、循环引用、缺失缓存等安全限制保持不变。
-
-### Quick start
-
-```bash
-# 检测未合并的 .xlsx/.xlsm（输出 JSON）
-xlmerge --repo <仓库路径> detect
-
-# 可选：把无需逐 Cell 审查的生成表加入仓库过滤列表
-xlmerge --repo <仓库路径> filter add locale/Key.xlsx
-
-# 提取三方版本并后台启动可视化解析器，返回 url（自动打开浏览器）
-xlmerge --repo <仓库路径> launch
-```
-
-环境变量：
-
-| 变量 | 作用 |
-|------|------|
-| `XLMERGE_PYTHON` | 指定解释器路径（如嵌入式 Python），跳过自动探测 |
-| `XLMERGE_VENV` | 覆盖默认 venv 目录 |
-| `XLMERGE_EXCEL_TIMEOUT_SECONDS` | 单个工作簿通过 Excel 隔离重算的硬超时，默认 120 秒 |
-
-## Usage
+### 操作流程
 
 ```bash
 # 检测未合并的 .xlsx/.xlsm（输出 JSON）
@@ -118,80 +88,24 @@ decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:
 }
 ```
 
-### Agent 调用规范
+#### Agent 调用规范
 
-包根 `AGENTS.md` 是 AI Agent 调用规范正本，包含适用场景、快速流程、禁止事项与边界。首次通过 v-cli 调用前应运行 `v-cli agent docs xlmerge` 掌握该规范；独立安装时也可直接读取包内 `AGENTS.md`。
+包根 `AGENTS.md` 是 AI Agent 调用规范正本，包含适用场景、快速流程、禁止事项与边界。首次通过 v-cli 调用前应运行 `v-cli agent docs xlmerge` 掌握该规范；直接安装时也可直接读取包内 `AGENTS.md`。
 
-## Development
+## 开发与验证
 
-```bash
-# 单元测试（覆盖引擎、公式安全、原子写回、过滤配置与大请求体全流程）
-python -m unittest discover -s python/tests -v
-
-# 可选：调用本机 Excel 的真实公式重算回归（仅操作临时目录）
-$env:XLSX_EXCEL_E2E=1; python -m unittest discover -s python/tests -v
-
-# 校验 v-cli.plugin.json 与 CLI 解析器未漂移（命令/选项/副作用覆盖）
-npm run check:manifest
-
-# 端到端（构造真实冲突仓库 -> detect -> launch -> API 决策 -> 写回提交）
-python e2e_test.py bin/xlmerge.js node
-
-# 打包
-npm pack
+```sh
+npm ci
+npm test
+npm run test:python
 ```
 
-### 包结构
+命令返回、结构校验、模拟测试与外部平台实际运行分别核验。发布版本和依赖以随包 `package.json` 为准。
 
-```
-bin/xlmerge.js                  # Node 启动垫片：探测 Python、按需建 venv、透传参数
-AGENTS.md                       # AI Agent 调用规范正本（场景/规范/流程/边界）
-v-cli.plugin.json               # Agent 插件清单（命令/选项/副作用），与 CLI 解析器做漂移校验
-python/
-├── xlsx_merge_engine/          # 三方结构化差异引擎（可独立 CLI 调试）
-│   └── xlsx_git_merge_bridge.py
-├── xlsx_resolver/              # 冲突解析器、公式值快照与 bottle UI
-└── tests/                      # 引擎与解析器测试（不随 npm 包发布）
-```
+## 文档
 
-> 注：为兼容嵌入式 Python 发行版（`._pth` 忽略 `PYTHONPATH`），模块内通过自举 `sys.path` 注入定位依赖，勿改为纯包导入。
+[Agent 调用规范](AGENTS.md) · [文档规范](docs/documentation.md)
 
-## Package family
+## 许可与版权
 
-kevlns 工具家族共享同一套发布约定（tag 驱动、CI 护栏、MIT）。
-
-| Package | Purpose | Version |
-| --- | --- | --- |
-| [`v-cli`](https://github.com/kevlns/v-cli) | 个人工具箱 CLI | v0.2.14 |
-| [`xlmerge`](https://github.com/kevlns/xlmerge) | Git 中 .xlsx/.xlsm 冲突可视化解决工具（本仓库） | v2.0.0 |
-| [`u-cli-mod`](https://github.com/kevlns/u-cli-mod) | Unity 精确版本路由 + CLI + pipeline 包（Windows-first） | v0.2.3 |
-| [`figma-to-uprefab`](https://github.com/kevlns/figma-to-uprefab) | Figma 导出、契约校验与 Unity UGUI staging Prefab 构建 | v0.1.1 |
-
-## Compatibility
-
-| Runtime | Supported versions |
-| --- | --- |
-| Node.js | `16` and later |
-| Python | `3.9` and later |
-| Excel formula calculation | Windows desktop Excel; formula-free workbooks remain cross-platform |
-
-## Contributing
-
-```bash
-git clone https://github.com/kevlns/xlmerge.git
-cd xlmerge
-python -m unittest discover -s python/tests -v
-npm run check:manifest
-```
-
-For bugs and feature requests, use [GitHub Issues](https://github.com/kevlns/xlmerge/issues).
-
-## License
-
-Released under the [MIT License](./LICENSE).
-
-<div align="center">
-
-Part of the **kevlns** tool family.
-
-</div>
+本工具采用 [MIT 许可](LICENSE)。Copyright © 2026 Vant。Vant 为工具集品牌；Figma、Unity、Steam、微信及其组件归各自权利人所有，第三方组件适用各自许可。
