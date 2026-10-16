@@ -79,6 +79,13 @@ class LoadingLifecycleTests(unittest.TestCase):
                 def get(route):
                     with urllib.request.urlopen(holder['url']+route,timeout=5) as r:return r.read()
                 try:
+                    get("/api/status")
+                    from session import inspect_session
+                    observed = inspect_session(path)
+                    self.assertTrue(observed['ok']); self.assertFalse(observed['stopConfirmed'])
+                    self.assertIn('sessionId', observed)
+                    wrong = urllib.request.Request(holder['url']+'/api/shutdown',data=b'{}',headers={'X-Xlmerge-Session':'wrong'},method='POST')
+                    with self.assertRaises(urllib.error.HTTPError): urllib.request.urlopen(wrong,timeout=5)
                     status=json.loads(get('/api/status'));self.assertEqual(status['state'],'preparing')
                     self.assertIn(b'poll()',get('/'));self.assertFalse(path.exists())
                     if mode!='cancel':
@@ -93,6 +100,9 @@ class LoadingLifecycleTests(unittest.TestCase):
                     request=urllib.request.Request(holder['url']+'/api/shutdown',data=b'',method='POST')
                     with urllib.request.urlopen(request,timeout=5) as r:self.assertTrue(json.load(r)['success'])
                     thread.join(5);self.assertFalse(thread.is_alive())
+                    settled = inspect_session(path)
+                    self.assertTrue(settled['stopConfirmed'])
+                    self.assertEqual(settled['state'], 'failed' if mode == 'failed' else 'cancelled')
                     if mode=='cancel':self.assertFalse(path.exists())
                 finally:
                     gate.set()

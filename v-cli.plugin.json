@@ -242,6 +242,57 @@
           "commits-by-default",
           "pushes-only-with-flag"
         ]
+      },
+      {
+        "path": [
+          "status"
+        ],
+        "usage": "xlmerge status --manifest <file>",
+        "description": "查询原审阅服务。",
+        "arguments": [],
+        "options": [
+          {
+            "flags": "--manifest <file>",
+            "description": "原审阅清单路径，必须与 session.json 身份一致。"
+          }
+        ],
+        "output": {
+          "format": "json",
+          "description": "返回审阅身份、状态、完成回执及 stopConfirmed；unknown 不代表已停止。"
+        },
+        "exitCodes": {
+          "0": "查询或停止请求完成。",
+          "1": "身份、连接或状态不可确认。"
+        },
+        "safety": [
+          "read-only"
+        ]
+      },
+      {
+        "path": [
+          "cancel"
+        ],
+        "usage": "xlmerge cancel --manifest <file>",
+        "description": "请求停止原审阅服务并等待回执。",
+        "arguments": [],
+        "options": [
+          {
+            "flags": "--manifest <file>",
+            "description": "原审阅清单路径，必须与 session.json 身份一致。"
+          }
+        ],
+        "output": {
+          "format": "json",
+          "description": "返回审阅身份、状态、完成回执及 stopConfirmed；unknown 不代表已停止。"
+        },
+        "exitCodes": {
+          "0": "查询或停止请求完成。",
+          "1": "身份、连接或状态不可确认。"
+        },
+        "safety": [
+          "binds-loopback",
+          "no-commit"
+        ]
       }
     ]
   }

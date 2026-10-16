@@ -23,7 +23,7 @@ sys.path.insert(0, str(RESOLVER_DIR))
 
 from resolve_xlsx_conflict import build_parser
 
-PUBLIC_COMMAND_PATHS = [("detect",), ("filter", "add"), ("prepare",), ("resolve",), ("launch",), ("apply",)]
+PUBLIC_COMMAND_PATHS = [("detect",), ("filter", "add"), ("prepare",), ("resolve",), ("launch",), ("apply",), ("status",), ("cancel",)]
 
 TOP_LEVEL_KEYS = ["schemaVersion", "package", "command", "bin", "description", "platforms", "runtime", "environment", "agent"]
 AGENT_KEYS = ["whenToUse", "globalOptions", "commands"]

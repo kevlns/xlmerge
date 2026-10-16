@@ -151,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument('--prepare', action='store_true', help=argparse.SUPPRESS)
     serve_parser.add_argument('--path', help=argparse.SUPPRESS)
 
+    for action in ("status", "cancel"):
+        control = subparsers.add_parser(action, help="查询或停止原审阅服务。")
+        control.add_argument("--manifest", required=True)
+
     apply_parser = subparsers.add_parser("apply", help="Apply a decisions JSON without launching the UI.")
     apply_parser.add_argument("--manifest", required=True)
     apply_parser.add_argument("--decisions", required=True)
@@ -164,6 +168,11 @@ def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     args = build_parser().parse_args(argv)
     try:
+        if args.command in ("status", "cancel"):
+            from session import inspect_session
+            result = inspect_session(args.manifest, cancel=args.command == "cancel")
+            _print(result)
+            return 0 if result["ok"] else 1
         # serve/apply 仅依赖 manifest（其 repoRoot 在 apply_manifest 内部解析），
         # 可在非 git 目录下运行；其余公开命令需要前置解析仓库。
         if args.command in ("detect", "filter", "prepare", "resolve", "launch"):

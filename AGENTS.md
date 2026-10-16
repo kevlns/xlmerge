@@ -156,6 +156,8 @@ cd <npm 包目录>
 python -m unittest discover -s python/tests -v
 ```
 
+后台审阅用 `xlmerge launch`。`xlmerge status --manifest <file>` 查询原服务，`xlmerge cancel --manifest <file>` 请求停止并检查 stopConfirmed；身份不一致拒绝停止。通过 v-cli 结构化执行时，launch/resolve 返回 accepted 与 handle；status/cancel 使用原 handle，后台进程继续持有工程租约，停止前不重放启动。
+
 ## 结果验证
 
 核对原始错误、任务身份、停止状态及实际产物。只报告已经完成的验证，模拟测试与真实执行分别说明。

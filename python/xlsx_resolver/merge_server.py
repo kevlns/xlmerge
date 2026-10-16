@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 import sys
 import threading
 import webbrowser
@@ -16,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from xlsx_conflict import ConflictError, _build_commit_message, apply_manifest, load_manifest
+from session import save_session
 from prepare_progress import preparation_context, PreparationCancelled, checkpoint
 
 
@@ -73,6 +76,9 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True, port: int = 0
     status = {'state': 'preparing' if prepare_repo else 'ready', 'phase': '开始解析',
               'file': '', 'fileDone': 0, 'fileTotal': 0, 'sheet': '', 'sheetDone': 0, 'sheetTotal': 0, 'side': ''}
 
+    receipt = {"sessionId": uuid.uuid4().hex, "pid": os.getpid(), "manifest": str(manifest_path), "state": "running"}
+    receipt_file = manifest_path.parent / "session.json"
+
     def report(progress):
         with lock:
             status.update(progress)
@@ -109,6 +115,11 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True, port: int = 0
         with lock:
             return _json(dict(status))
 
+    @app.get("/api/session")
+    def session_status():
+        with lock:
+            return _json({**receipt, "progress": dict(status)})
+
     @app.get("/api/diff")
     def diff():
         if manifest is None:
@@ -141,6 +152,7 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True, port: int = 0
                 message=(payload.get("message") or "").strip() or None,
             )
             if result["success"]:
+                receipt.update(state="completed", result=result)
                 state["resolved"] = True
                 threading.Timer(2.0, state["server"].shutdown).start()
             return _json(result, 200 if result["success"] else 500)
@@ -153,6 +165,10 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True, port: int = 0
 
     @app.post("/api/shutdown")
     def shutdown():
+        _payload()
+        identity = request.headers.get("X-Xlmerge-Session")
+        if identity is not None and identity != receipt["sessionId"]:
+            return _json({"success": False, "error": "审阅身份不一致"}, 409)
         with lock:
             if status['state'] == 'preparing':
                 cancelled.set()
@@ -169,11 +185,19 @@ def serve(manifest_path: Path | str, *, open_browser: bool = True, port: int = 0
     if worker:
         worker.start()
     url = f"http://127.0.0.1:{server.server_port}"
+    receipt["url"] = url
+    save_session(receipt_file, receipt)
     print(f"MERGE_SERVER_URL={url}", flush=True)
     if open_browser:
         webbrowser.open(url)
     try:
         server.serve_forever()
     finally:
+        cancelled.set()
+        if worker:
+            worker.join()
         server.server_close()
+        if receipt["state"] != "completed":
+            receipt["state"] = "failed" if status["state"] == "failed" else "cancelled"
+        save_session(receipt_file, receipt)
     return bool(state["resolved"])

@@ -1,6 +1,6 @@
 {
   "name": "@kevlns/xlmerge",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。",
   "bin": {
     "xlmerge": "bin/xlmerge.js"
