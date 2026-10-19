@@ -55,8 +55,8 @@ class WholeSourceRepairTests(unittest.TestCase):
         self.assertNotIn('defaultValue',xc._repair_field_info(ws,'B3'))
         self.assertNotIn('defaultValue',xc._repair_field_info(ws,'C3'))
         self.assertEqual(xc._repair_field_info(ws,'D3')['defaultValue'],False)
-        for kind,value in [('bool',False),('string',''),('string','=literal'),('uint',0),('int',-1)]:xc._validate_repair_value(kind,value)
-        for kind,value in [('bool',0),('uint',-1),('float',float('nan')),('Custom',0)]:
+        for kind,value in [('',0),('',0.5),('bool',False),('string',''),('string','=literal'),('uint',0),('int',-1)]:xc._validate_repair_value(kind,value)
+        for kind,value in [('',float('nan')),('',False),('bool',0),('uint',-1),('float',float('nan')),('Custom',0)]:
             with self.assertRaises(xc.ConflictError):xc._validate_repair_value(kind,value)
         book.close()
 

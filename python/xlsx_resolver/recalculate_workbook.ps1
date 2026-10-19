@@ -79,13 +79,12 @@ try {
     $excel.AskToUpdateLinks = $false
     $excel.AutomationSecurity = 3
     $excel.UserControl = $false
-    # Iterative calculation can make a circular workbook appear to have a
-    # stable value.  It is never safe for a conflict snapshot.
-    if ($excel.Iteration) { throw 'Excel iterative calculation is enabled' }
-
     # UpdateLinks=0 and ReadOnly=true are positional arguments in the Excel COM
     # API.  The temporary source is never saved in place.
     $book = $excel.Workbooks.Open($source, 0, $true)
+    # Iterative calculation can make a circular workbook appear to have a
+    # stable value. Check after opening the workbook: with no open workbooks,
+    # some Excel versions report Application.Iteration as true unconditionally.
     if ($excel.Iteration) { throw 'Workbook enables iterative calculation' }
     $excel.CalculateFullRebuild()
     $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSeconds)

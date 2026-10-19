@@ -963,6 +963,7 @@ function validRepair(error, value) {
   if (error.type === 'bool') return typeof value === 'boolean';
   if (['float', 'double', 'decimal'].includes(error.type)) return typeof value === 'number' && Number.isFinite(value);
   const kind = error.type || '';
+  if (!kind) return typeof value === 'number' && Number.isFinite(value);
   if (!/^(?:u?int(?:8|16|32|64)?|s?byte|u?short|u?long)$/.test(kind) || !Number.isSafeInteger(value)) return false;
   const sizes = {byte:8,sbyte:8,short:16,ushort:16,long:64,ulong:64};
   const bits = sizes[kind] || Number((kind.match(/\d+$/) || ['32'])[0]);

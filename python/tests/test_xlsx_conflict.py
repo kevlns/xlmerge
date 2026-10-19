@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -350,6 +351,26 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), before_output)
         self.assertEqual(git(self.repo, "ls-files", "--stage").stdout, before_index)
         self.assertTrue(git(self.repo, "ls-files", "-u").stdout.strip())
+
+    def test_repaired_analysis_source_keeps_original_git_index_identity(self):
+        def mark_repaired(path):
+            with zipfile.ZipFile(path, "a") as archive:
+                archive.comment = b"analysis-copy-repaired"
+
+        runtime = Path(self.temp.name) / "runtime-repaired-source"
+        with patch("xlsx_conflict._repair_invalid_dimension_styles", side_effect=mark_repaired):
+            manifest_path = prepare_conflicts(self.repo, runtime_dir=runtime)
+        manifest = load_manifest(manifest_path)
+        entry = manifest["files"][0]
+        for side, stage in (("base", 1), ("ours", 2), ("theirs", 3)):
+            metadata = entry["valueSnapshots"][side]
+            index_hash = hashlib.sha256(_git_blob(self.repo, stage, entry["path"])).hexdigest()
+            self.assertEqual(metadata["gitIndexSha256"], index_hash)
+            self.assertNotEqual(metadata["sourceSha256"], index_hash)
+
+        result = apply_manifest(manifest_path, self._complete_decisions(), commit=False)
+        self.assertTrue(result["success"], result)
+        self.assertEqual(git(self.repo, "diff", "--name-only", "--diff-filter=U").stdout.strip(), "")
 
     def test_tampered_source_or_worktree_is_rejected_without_writing(self):
         for tamper_kind in ("source", "worktree"):

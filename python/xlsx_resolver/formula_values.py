@@ -649,7 +649,24 @@ def materialize_values(source_path: Path | str, output_path: Path | str, *, allo
     temporary_result = temp_dir / ("calculated" + source.suffix.lower())
     try:
         shutil.copy2(source, temporary_source)
-        _run_excel_recalculate(temporary_source, temporary_result, timeout_seconds)
+        try:
+            _run_excel_recalculate(temporary_source, temporary_result, timeout_seconds)
+        except FormulaValueError as exc:
+            # Some producers leave a valid OOXML workbook package that
+            # openpyxl can read but Excel refuses at Workbooks.Open. Rebuild
+            # only the disposable calculation copy, then retry Excel; the Git
+            # stage workbook remains byte-for-byte untouched.
+            message = str(exc)
+            if "Workbooks" not in message or "Open" not in message:
+                raise
+            workbook = load_workbook(
+                temporary_source, data_only=False, keep_links=True, keep_vba=keep_vba
+            )
+            try:
+                workbook.save(temporary_source)
+            finally:
+                workbook.close()
+            _run_excel_recalculate(temporary_source, temporary_result, timeout_seconds)
         return _materialize_from_result(source, temporary_result, output,
                                         {(sheet, coordinate) for sheet, coordinate, _ in formulas},
                                         allow_errors=allow_errors)

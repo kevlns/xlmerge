@@ -278,6 +278,57 @@ def _slug(relative_path: str) -> str:
     return safe[-120:] or "workbook"
 
 
+def _repair_invalid_dimension_styles(path: Path) -> None:
+    """Remove row or column style ids missing from an extracted style table."""
+    with zipfile.ZipFile(path, "r") as source:
+        try:
+            styles = source.read("xl/styles.xml")
+        except KeyError:
+            return
+        cell_xfs = re.search(rb"<cellXfs\b[^>]*>(.*?)</cellXfs>", styles, re.DOTALL)
+        if cell_xfs is None:
+            return
+        style_count = len(re.findall(rb"<xf\b", cell_xfs.group(1)))
+        replacements: dict[str, bytes] = {}
+        for name in source.namelist():
+            if not name.startswith("xl/worksheets/") or not name.endswith(".xml"):
+                continue
+            payload = source.read(name)
+
+            def repair_row(match: re.Match[bytes]) -> bytes:
+                tag = match.group(0)
+                style = re.search(rb'\bs="(\d+)"', tag)
+                if style is None or int(style.group(1)) < style_count:
+                    return tag
+                tag = re.sub(rb'\s+s="\d+"', b"", tag, count=1)
+                return re.sub(rb'\s+customFormat="[01]"', b"", tag, count=1)
+
+            repaired = re.sub(rb"<row\b[^>]*>", repair_row, payload)
+            def repair_column(match: re.Match[bytes]) -> bytes:
+                tag = match.group(0)
+                style = re.search(rb'\bstyle="(\d+)"', tag)
+                if style is None or int(style.group(1)) < style_count:
+                    return tag
+                return re.sub(rb'\s+style="\d+"', b"", tag, count=1)
+
+            repaired = re.sub(rb"<col\b[^>]*/?>", repair_column, repaired)
+            if repaired != payload:
+                replacements[name] = repaired
+        if not replacements:
+            return
+        entries = [(info, replacements.get(info.filename, source.read(info.filename))) for info in source.infolist()]
+
+    temporary = path.with_name(f".{path.name}.row-styles.tmp")
+    try:
+        with zipfile.ZipFile(temporary, "w") as output:
+            for info, payload in entries:
+                output.writestr(info, payload)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _json_value(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -436,6 +487,8 @@ def _repair_field_info(ws, coordinate):
 
 def _validate_repair_value(kind, value):
     import math
+    if not kind and type(value) in (int, float) and math.isfinite(value):
+        return
     if kind == 'string' and isinstance(value, str):
         return
     if kind == 'bool' and isinstance(value, bool):
@@ -1345,6 +1398,9 @@ def prepare_conflicts(
             base_path.write_bytes(base_blob)
         elif base_path.exists():
             base_path.unlink()
+        for extracted_path in (base_path if base_blob is not None else None, ours_path, theirs_path):
+            if extracted_path is not None:
+                _repair_invalid_dimension_styles(extracted_path)
         workbook_diff = diff_workbooks(
             base_path if base_blob is not None else None,
             ours_path,
@@ -1352,6 +1408,13 @@ def prepare_conflicts(
             analysis_dir=work_dir / "analysis",
         )
         value_snapshots = workbook_diff.get("valueSnapshots") or {}
+        index_hashes = {
+            "base": hashlib.sha256(base_blob).hexdigest() if base_blob is not None else None,
+            "ours": hashlib.sha256(ours_blob).hexdigest(),
+            "theirs": hashlib.sha256(theirs_blob).hexdigest(),
+        }
+        for side, snapshot_meta in value_snapshots.items():
+            snapshot_meta["gitIndexSha256"] = index_hashes.get(side)
         prepared_files.append({
             "id": path,
             "path": path,
@@ -2170,7 +2233,8 @@ def _validate_manifest_sources(manifest: dict[str, Any], repo: Path) -> None:
             indexed = _git_blob(repo, stage, relative)
             if indexed is None:
                 raise ConflictError(f"Git index stage {stage} changed or disappeared for {relative} ({side}).")
-            if expected_source and hashlib.sha256(indexed).hexdigest() != expected_source:
+            expected_index = meta.get("gitIndexSha256") or expected_source
+            if expected_index and hashlib.sha256(indexed).hexdigest() != expected_index:
                 raise ConflictError(f"Git index source changed for {relative} ({side}); re-run prepare.")
             value_path = meta.get("valuePath")
             expected_value = meta.get("valueSha256")
