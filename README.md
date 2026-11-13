@@ -90,7 +90,7 @@ decisions.json 格式（Cell 用 manifest 中的稳定逻辑 ID，如 `row:base:
 
 #### Agent 调用规范
 
-包根 `AGENTS.md` 是 AI Agent 调用规范正本，包含适用场景、快速流程、禁止事项与边界。首次通过 v-cli 调用前应运行 `v-cli agent docs xlmerge` 掌握该规范；直接安装时也可直接读取包内 `AGENTS.md`。
+运行规范见 [xlmerge 技能](skills/xlmerge/SKILL.md)。首次处理工作簿冲突前，读取技能中链接的操作参考，核对目标仓库、冲突文件和写回条件。
 
 ## 开发与验证
 
@@ -104,7 +104,7 @@ npm run test:python
 
 ## 文档
 
-[Agent 调用规范](AGENTS.md) · [文档规范](docs/documentation.md)
+[Agent 调用规范](skills/xlmerge/SKILL.md) · [文档规范](docs/documentation.md)
 
 ## 许可与版权
 

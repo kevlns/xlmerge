@@ -25,7 +25,7 @@ from resolve_xlsx_conflict import build_parser
 
 PUBLIC_COMMAND_PATHS = [("detect",), ("filter", "add"), ("prepare",), ("resolve",), ("launch",), ("apply",), ("status",), ("cancel",)]
 
-TOP_LEVEL_KEYS = ["schemaVersion", "package", "command", "bin", "description", "platforms", "runtime", "environment", "agent"]
+TOP_LEVEL_KEYS = ["schemaVersion", "package", "command", "bin", "description", "platforms", "runtime", "environment", "agent", "skills"]
 AGENT_KEYS = ["whenToUse", "globalOptions", "commands"]
 COMMAND_KEYS = ["path", "usage", "description", "arguments", "options", "output", "exitCodes", "safety"]
 OPTION_KEYS = ["flags", "description"]

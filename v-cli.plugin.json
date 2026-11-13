@@ -295,5 +295,11 @@
         ]
       }
     ]
-  }
+  },
+  "skills": [
+    {
+      "id": "xlmerge",
+      "path": "skills/xlmerge/SKILL.md"
+    }
+  ]
 }
