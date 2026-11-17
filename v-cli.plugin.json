@@ -3,7 +3,7 @@
   "package": "@kevlns/xlmerge",
   "command": "xlmerge",
   "bin": "xlmerge",
-  "description": "在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。",
+  "description": "处理 Git 中的 Excel 三方冲突，支持 Agent 根据项目规则裁决并写回，也支持浏览器逐项审阅。",
   "platforms": [
     "darwin",
     "linux",
@@ -32,7 +32,7 @@
     }
   ],
   "agent": {
-    "whenToUse": "When a user asks to resolve Git merge conflicts in .xlsx/.xlsm planning or configuration tables (策划表/配置表冲突): run detect first; when reviewCount > 0 run launch and give the returned url to the user. Configured auto-theirs filters may resolve and commit matched generated workbooks without opening the UI. Do not inspect workbook cells or summarize diffs yourself; the resolver owns diff, choices, write-back and commit.",
+    "whenToUse": "在发生合并的工区 detect → prepare，读取 manifest 中 base/ours/theirs 的差异与稳定 ID，按项目约束及变更意图裁决。仅将无法判断的业务项交控制源。用 apply --no-commit 写回并验证 Git 索引，按原任务完成提交或交付。用户选择可视化审阅时使用 launch。",
     "globalOptions": [
       {
         "flags": "--repo <path>",
@@ -217,7 +217,7 @@
           },
           {
             "flags": "--no-commit",
-            "description": "写回后不执行 git add/commit。"
+            "description": "写回并暂存已解决的工作簿，保留当前合并，跳过提交。"
           },
           {
             "flags": "--push",

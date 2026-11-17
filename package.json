@@ -1,7 +1,7 @@
 {
   "name": "@kevlns/xlmerge",
-  "version": "2.0.6",
-  "description": "在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。",
+  "version": "2.0.7",
+  "description": "处理 Git 中的 Excel 三方冲突，支持 Agent 根据项目规则裁决并写回，也支持浏览器逐项审阅。",
   "bin": {
     "xlmerge": "bin/xlmerge.js"
   },

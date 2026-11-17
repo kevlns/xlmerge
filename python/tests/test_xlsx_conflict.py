@@ -754,14 +754,11 @@ class XlsxConflictIntegrationTests(unittest.TestCase):
             if process.stderr is not None:
                 process.stderr.close()
 
-    def test_runtime_skill_declares_ui_first_detect_then_launch_route(self):
-        agent_doc = (PACKAGE_ROOT.parent / "skills/xlmerge/references/project.md").read_text(encoding="utf-8")
-        self.assertLess(agent_doc.index("--repo <repo> detect"), agent_doc.index("--repo <repo> launch"))
-        self.assertIn("不调用通用 `xlsx` Skill", agent_doc)
-        self.assertIn("不运行 `prepare` 后读取 manifest", agent_doc)
-        self.assertIn("不使用阻塞式 `resolve` 作为正常入口", agent_doc)
-        self.assertIn("不默认走无头自动合并", agent_doc)
-        self.assertIn("默认流程必须走 UI `launch`", agent_doc)
+    def test_runtime_skill_declares_agent_and_browser_paths(self):
+        guide = (PACKAGE_ROOT.parent / "skills/xlmerge/references/project.md").read_text(encoding="utf-8")
+        self.assertLess(guide.index("--repo <repo> detect"), guide.index("--repo <repo> prepare"))
+        self.assertIn("apply --manifest <manifest.json> --decisions <decisions.json> --no-commit", guide)
+        self.assertIn("亲自审阅时可用 launch", guide)
 
 
 class XlsmConflictTests(unittest.TestCase):

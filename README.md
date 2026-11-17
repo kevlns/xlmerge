@@ -4,7 +4,7 @@
 
 ## 功能
 
-在浏览器中审阅 Git 冲突工作簿的三方差异，校验后写回并提交合并结果。
+处理 Git 中的 Excel 三方冲突，支持 Agent 根据项目规则裁决并写回，也支持浏览器逐项审阅。
 
 ## 环境要求
 
@@ -20,7 +20,9 @@ npm install -g @kevlns/xlmerge
 
 ```sh
 xlmerge --repo <仓库目录> detect
-xlmerge --repo <仓库目录> launch
+xlmerge --repo <仓库目录> prepare
+# 根据清单生成 decisions.json 后写回并暂存
+xlmerge --repo <仓库目录> apply --manifest <manifest.json> --decisions <decisions.json> --no-commit
 ```
 
 ## 使用说明
@@ -55,7 +57,7 @@ xlmerge --repo <仓库路径> launch --path new_meta/Items.xlsx
 # 前台阻塞式运行（与 launch 等价，进程前台等待完成）
 xlmerge --repo <仓库路径> resolve
 
-# 非交互（自动化/CI）：先 prepare 再 apply
+# Agent 自主裁决或自动化处理：先 prepare 再 apply
 xlmerge --repo <仓库路径> prepare
 xlmerge --repo <仓库路径> apply --manifest <manifest.json> --decisions <decisions.json> [--no-commit] [--message <text>] [--push]
 ```
