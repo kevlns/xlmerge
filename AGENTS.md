@@ -1,3 +1,5 @@
+<!-- Copyright © 2026 Vant <sl_kevln@163.com> -->
+
 # Vant 表格合并开发规范
 
 ## 定位
@@ -22,4 +24,4 @@
 
 ## 许可与版权
 
-MIT。Copyright © 2026 Vant。
+MIT。Copyright © 2026 Vant <sl_kevln@163.com>。

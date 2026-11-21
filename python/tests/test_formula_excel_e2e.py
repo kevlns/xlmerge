@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Opt-in, real Excel verification of formula-aware three-way merges.
 
 Run with XLSX_EXCEL_E2E=1 using the bundled Python and unittest discover.

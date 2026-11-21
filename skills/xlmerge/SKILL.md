@@ -2,6 +2,8 @@
 name: xlmerge
 description: "处理 Git 中的 Excel 三方冲突，支持 Agent 根据项目规则裁决并写回，也支持浏览器逐项审阅。"
 ---
+<!-- Copyright © 2026 Vant <sl_kevln@163.com> -->
+
 
 # 配表冲突
 

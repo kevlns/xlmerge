@@ -1,3 +1,4 @@
+// Copyright © 2026 Vant <sl_kevln@163.com>
 import {readFileSync,existsSync,readdirSync} from 'node:fs';
 import {resolve,join,dirname} from 'node:path';
 const root=process.cwd();

@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Per-preparation progress and cooperative cancellation; no global job state."""
 from contextvars import ContextVar
 from contextlib import contextmanager

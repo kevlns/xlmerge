@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Execute the UI review/navigation logic, including old manifest flags."""
 from pathlib import Path
 import subprocess

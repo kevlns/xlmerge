@@ -1,3 +1,5 @@
+<!-- Copyright © 2026 Vant <sl_kevln@163.com> -->
+
 # 配表冲突处理
 
 ## 定位
@@ -56,4 +58,4 @@ python -m unittest discover -s python/tests -v
 
 ## 许可与版权
 
-MIT。Copyright © 2026 Vant。
+MIT。Copyright © 2026 Vant <sl_kevln@163.com>。

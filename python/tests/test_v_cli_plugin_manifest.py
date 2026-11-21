@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Deterministic validation of v-cli.plugin.json against the argparse CLI and package metadata.
 
 Covers:

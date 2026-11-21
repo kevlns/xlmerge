@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """CLI entry point for repository-local XLSX/XLSM conflict resolution."""
 
 from __future__ import annotations

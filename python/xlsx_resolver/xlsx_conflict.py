@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Three-way, sheet-aware XLSX conflict detection and merge primitives."""
 
 from __future__ import annotations

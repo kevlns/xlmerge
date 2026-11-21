@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """审阅服务的持久化身份与完成回执。"""
 import json
 import os

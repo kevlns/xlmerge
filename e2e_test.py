@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """E2E：构造 xlsx 冲突仓库并驱动 xlmerge 完整流程。"""
 import json
 import os

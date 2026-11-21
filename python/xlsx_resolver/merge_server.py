@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Local-only HTTP server for the sheet-aware XLSX resolver UI."""
 
 from __future__ import annotations

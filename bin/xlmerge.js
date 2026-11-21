@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Copyright © 2026 Vant <sl_kevln@163.com>
 /**
  * xlmerge 启动垫片：定位可用 Python 解释器后透传参数给包内 CLI。
  * - 解释器优先级：XLMERGE_PYTHON > python3 > python > py -3（需 >= 3.9）

@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Safe, Excel-backed formula materialisation for the conflict resolver.
 
 This module deliberately has a small trust boundary.  Excel is only ever given a

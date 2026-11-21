@@ -1,3 +1,4 @@
+# Copyright © 2026 Vant <sl_kevln@163.com>
 """Debug bridge: project three XLSX versions to JSONL and let Git merge rows.
 
 This tool is intentionally independent from the production XLSX resolver.  It
